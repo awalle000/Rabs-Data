@@ -1,0 +1,7 @@
+.phone-input__warn {
+  font-size: 0.85rem;
+  color: var(--color-warning);
+  background: var(--color-warning-soft);
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+}

@@ -1,0 +1,37 @@
+.auth {
+  max-width: 460px;
+}
+
+.auth__show {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--color-muted);
+}
+
+.field__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.35rem;
+}
+
+.field__header .field__label {
+  margin-bottom: 0;
+}
+
+.auth__forgot {
+  font-size: 0.825rem;
+  color: var(--color-primary, #2563eb);
+  text-decoration: none;
+}
+
+.auth__forgot:hover {
+  text-decoration: underline;
+}
+
+.auth__switch {
+  margin: 1rem 0 0;
+  text-align: center;
+}

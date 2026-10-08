@@ -1,0 +1,33 @@
+.track {
+  max-width: 520px;
+}
+
+.track__recent {
+  margin-top: 2rem;
+}
+
+.track__recent h2 {
+  font-size: 1.1rem;
+}
+
+.track__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.track__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.85rem 1rem;
+  color: var(--color-text);
+  text-decoration: none;
+  box-shadow: none;
+}
+
+.track__item:hover {
+  border-color: var(--color-primary);
+}

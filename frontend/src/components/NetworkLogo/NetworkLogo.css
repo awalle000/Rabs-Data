@@ -1,0 +1,47 @@
+.network-logo {
+  --logo-h: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  vertical-align: middle;
+}
+
+.network-logo--sm {
+  --logo-h: 28px;
+}
+
+.network-logo--lg {
+  --logo-h: 64px;
+}
+
+.network-logo__tile {
+  display: inline-block;
+  flex: none;
+  height: var(--logo-h);
+  width: calc(var(--logo-h) * 1.6);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--logo-h) * 0.18);
+  background: #fff;
+}
+
+.network-logo__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.network-logo__fallback {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  background: var(--color-primary-soft);
+  color: var(--color-primary-dark);
+  font-weight: 800;
+}
+
+.network-logo__name {
+  font-weight: 700;
+}

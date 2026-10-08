@@ -1,0 +1,21 @@
+# Environment files
+**/.env
+**/.env.*
+!**/.env.example
+
+# Dependencies and build output
+**/node_modules/
+**/dist/
+**/build/
+**/.vite/
+
+# Logs
+**/*.log
+
+# Editor settings
+.vscode/
+.idea/
+.DS_Store
+
+# OS files
+Thumbs.db

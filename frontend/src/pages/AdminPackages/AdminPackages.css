@@ -1,0 +1,79 @@
+.pkg-add {
+  margin-left: auto;
+}
+
+.pkg-actions {
+  display: inline-flex;
+  gap: 0.4rem;
+}
+
+.pkg-switch {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border: 0;
+  border-radius: 999px;
+  background: #cbd5e1;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.pkg-switch--on {
+  background: var(--color-primary);
+}
+
+.pkg-switch:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.pkg-switch__thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+
+.pkg-switch--on .pkg-switch__thumb {
+  transform: translateX(18px);
+}
+
+.pkg-form__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.pkg-form__profit {
+  margin: -0.25rem 0 1rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-dark);
+}
+
+.pkg-form__profit--bad {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.pkg-form__hint {
+  margin: -0.5rem 0 1rem;
+}
+
+.pkg-form__active {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+@media (max-width: 480px) {
+  .pkg-form__row {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,9 @@
+.profile {
+  max-width: 560px;
+  display: grid;
+  gap: 1rem;
+}
+
+.profile h2 {
+  font-size: 1.1rem;
+}

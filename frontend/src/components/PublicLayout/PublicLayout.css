@@ -1,0 +1,16 @@
+.public-layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.public-layout__main {
+  flex: 1;
+  outline: none;
+}
+
+@media (max-width: 767px) {
+  .public-layout {
+    padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px));
+  }
+}

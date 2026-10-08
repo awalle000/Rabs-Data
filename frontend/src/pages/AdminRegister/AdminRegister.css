@@ -1,0 +1,13 @@
+.admin-register {
+  max-width: 500px;
+  margin: 0 auto;
+}
+
+.admin-register__card {
+  padding: 24px;
+}
+
+.admin-register__hint {
+  margin-top: -12px;
+  margin-bottom: 24px;
+}

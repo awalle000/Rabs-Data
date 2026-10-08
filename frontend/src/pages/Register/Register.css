@@ -1,0 +1,13 @@
+.register {
+  max-width: 460px;
+}
+
+.register__hint {
+  margin-top: -0.5rem;
+  margin-bottom: 1rem;
+}
+
+.register__switch {
+  margin: 1rem 0 0;
+  text-align: center;
+}

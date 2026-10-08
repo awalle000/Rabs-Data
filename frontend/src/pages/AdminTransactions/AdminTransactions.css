@@ -1,0 +1,14 @@
+.txs__credit {
+  color: var(--color-primary-dark);
+  font-weight: 700;
+}
+
+.txs__debit {
+  color: var(--color-danger);
+  font-weight: 700;
+}
+
+.txs__ref {
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}

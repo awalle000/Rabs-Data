@@ -1,0 +1,33 @@
+.order-status {
+  display: inline-block;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.order-status--neutral {
+  background: #eef2f7;
+  color: #475569;
+}
+
+.order-status--warning {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.order-status--info {
+  background: var(--color-info-soft);
+  color: var(--color-info);
+}
+
+.order-status--success {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-dark);
+}
+
+.order-status--danger {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}

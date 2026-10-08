@@ -1,0 +1,52 @@
+.details {
+  max-width: 640px;
+  display: grid;
+  gap: 1rem;
+}
+
+.details__back {
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.details__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.details__head .page__title {
+  margin: 0;
+  font-size: 1.3rem;
+  overflow-wrap: anywhere;
+}
+
+.details__info dl {
+  margin: 0;
+}
+
+.details__info dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px dashed var(--color-border);
+}
+
+.details__info dt {
+  color: var(--color-muted);
+}
+
+.details__info dd {
+  margin: 0;
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.details__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}

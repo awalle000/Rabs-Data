@@ -1,0 +1,37 @@
+.order-summary__title {
+  font-size: 1.05rem;
+  margin-bottom: 0.75rem;
+}
+
+.order-summary__list {
+  margin: 0;
+}
+
+.order-summary__list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px dashed var(--color-border);
+}
+
+.order-summary__list dt {
+  color: var(--color-muted);
+}
+
+.order-summary__list dd {
+  margin: 0;
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.order-summary__total {
+  border-bottom: 0 !important;
+  padding-top: 0.85rem !important;
+  font-size: 1.15rem;
+}
+
+.order-summary__total dd {
+  color: var(--color-primary);
+}

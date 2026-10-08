@@ -1,0 +1,12 @@
+.orders__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.orders__filter {
+  min-width: 180px;
+  margin-bottom: 1.5rem;
+}

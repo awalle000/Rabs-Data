@@ -1,0 +1,43 @@
+.wallet {
+  max-width: 640px;
+  display: grid;
+  gap: 1rem;
+}
+
+.wallet__balance {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  background: linear-gradient(135deg, #064e33, #0a7d4f);
+  color: #fff;
+}
+
+.wallet__balance .muted {
+  color: #cfeede;
+}
+
+.wallet__amount {
+  font-size: 2.2rem;
+}
+
+.wallet__fund h2,
+#history-title {
+  font-size: 1.1rem;
+}
+
+.wallet__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.wallet__credit {
+  color: var(--color-primary-dark);
+  font-weight: 700;
+}
+
+.wallet__debit {
+  color: var(--color-danger);
+  font-weight: 700;
+}

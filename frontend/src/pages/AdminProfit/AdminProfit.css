@@ -1,0 +1,292 @@
+/* ── Profit Dashboard ─────────────────────────────────────────────── */
+
+.profit-dash {
+  display: grid;
+  gap: 1.25rem;
+}
+
+/* ── Date Filter Bar ── */
+.profit-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.profit-filters__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.profit-filter-btn {
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  color: var(--color-text);
+}
+
+.profit-filter-btn:hover {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.profit-filter-btn--active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+
+.profit-filter-btn--sm {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.65rem;
+}
+
+.profit-filters__custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.profit-date-input {
+  min-width: 160px;
+  width: auto;
+  flex: none;
+}
+
+/* ── KPI Grid ── */
+.profit-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 0.9rem;
+}
+
+.profit-wallet-card {
+  border-left: 3px solid var(--color-info);
+}
+
+.profit-wallet-note {
+  font-size: 0.72rem;
+  color: var(--color-danger);
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+/* ── Financial Summary Banner ── */
+.profit-summary-banner {
+  overflow-x: auto;
+}
+
+.profit-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0;
+}
+
+.profit-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 130px;
+}
+
+.profit-summary-item--highlight {
+  padding: 0.6rem 1rem;
+  background: var(--color-primary-soft);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-primary);
+}
+
+.profit-summary-item__label {
+  font-size: 0.78rem;
+  color: var(--color-muted);
+}
+
+.profit-summary-item__value {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.profit-summary-divider {
+  font-size: 1.5rem;
+  font-weight: 300;
+  color: var(--color-muted);
+  align-self: center;
+}
+
+.profit-fee-note {
+  margin: 1rem 0 0;
+  font-size: 0.84rem;
+  color: var(--color-muted);
+  border-top: 1px solid var(--color-border);
+  padding-top: 0.75rem;
+}
+
+/* ── Section headers ── */
+.profit-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.profit-section-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.05rem;
+}
+
+.profit-section-head .profit-section-title {
+  margin-bottom: 0;
+}
+
+.profit-subtitle {
+  font-size: 0.85rem;
+}
+
+.profit-granularity {
+  display: flex;
+  gap: 0.4rem;
+}
+
+/* ── Network Cards ── */
+.profit-network-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.profit-network-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.profit-network-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.7rem 1rem;
+  background: var(--net-color, #eee);
+  color: #000;
+}
+
+.profit-network-card__name {
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.profit-network-card__orders {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.profit-network-card__rows {
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.profit-network-card__row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+}
+
+.profit-network-card__row--profit {
+  font-size: 1rem;
+  border-top: 1px solid var(--color-border);
+  padding-top: 0.35rem;
+  margin-top: 0.25rem;
+}
+
+.profit-network-card__bar {
+  height: 4px;
+  background: var(--color-border);
+  margin: 0 1rem 0.75rem;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.profit-network-card__bar-fill {
+  height: 100%;
+  background: var(--net-color, #0a7d4f);
+  border-radius: 2px;
+  transition: width 0.5s ease;
+}
+
+/* ── Network badge in bundle table ── */
+.profit-network-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.profit-network-badge--mtn { background: #fff3b0; color: #7a6200; }
+.profit-network-badge--telecel { background: #fde8e8; color: #c62828; }
+.profit-network-badge--airteltigo { background: #dbeafe; color: #1d4ed8; }
+
+/* ── Colors ── */
+.profit-green { color: var(--color-primary); }
+.profit-red   { color: var(--color-danger); }
+.profit-margin {
+  font-weight: 600;
+  color: var(--color-info);
+}
+
+/* ── Order ID code ── */
+.profit-order-id {
+  font-size: 0.82rem;
+  background: var(--color-bg);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
+/* ── Empty state ── */
+.profit-empty {
+  padding: 1.5rem 0;
+  text-align: center;
+}
+
+/* ── Glossary ── */
+.profit-legend-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.profit-legend-item strong {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.92rem;
+}
+
+.profit-legend-item p {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+  margin: 0;
+}
+
+/* ── Responsive ── */
+@media (max-width: 600px) {
+  .profit-summary-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .profit-summary-divider {
+    transform: rotate(90deg);
+    align-self: auto;
+  }
+}
