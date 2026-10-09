@@ -1,26 +1,48 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBaseUrl } from '../services/api.js';
 
-const DEFAULT_RETRY_DELAYS = [2000, 3000, 5000, 8000, 10000];
+const DEFAULT_RETRY_BASE_MS = 2000;
+const DEFAULT_RETRY_MAX_MS = 15000;
 const DEFAULT_MAX_WAIT_MS = 120000;
-const RETRY_JITTER_MS = 250;
 
-const getRetryDelays = () => globalThis.__RABS_BACKEND_RETRY_DELAYS__ || DEFAULT_RETRY_DELAYS;
-const getMaxWaitMs = () => globalThis.__RABS_BACKEND_MAX_WAIT_MS__ || DEFAULT_MAX_WAIT_MS;
+const getMaxWaitMs = () =>
+  Number(globalThis.__RABS_BACKEND_MAX_WAIT_MS__ ?? import.meta.env.VITE_BACKEND_MAX_WAIT_MS) || DEFAULT_MAX_WAIT_MS;
 
-const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+const getRetryDelay = (retryIndex) => {
+  const overrides = globalThis.__RABS_BACKEND_RETRY_DELAYS__;
+  const ceiling = Array.isArray(overrides) && overrides.length
+    ? overrides[Math.min(retryIndex, overrides.length - 1)]
+    : Math.min(DEFAULT_RETRY_BASE_MS * 2 ** retryIndex, DEFAULT_RETRY_MAX_MS);
+  return Math.round(ceiling * (0.5 + Math.random() * 0.5));
+};
+
+const wait = (ms, signal) =>
+  new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
+
+    const finish = (completed) => {
+      window.clearTimeout(timer);
+      signal.removeEventListener('abort', handleAbort);
+      resolve(completed);
+    };
+    const handleAbort = () => finish(false);
+    const timer = window.setTimeout(() => finish(true), ms);
+    signal.addEventListener('abort', handleAbort, { once: true });
+  });
 
 const BackendConnectionContext = createContext(null);
 
 export function BackendConnectionProvider({ children }) {
   const [status, setStatus] = useState(() => (typeof navigator !== 'undefined' && navigator.onLine === false ? 'offline' : 'connecting'));
   const [message, setMessage] = useState('Connecting to Rabs Data...');
-  const runIdRef = useRef(0);
-  const abortRef = useRef(null);
+  const activeRunRef = useRef(null);
 
-  const clearInFlight = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
+  const cancelHealthCheck = useCallback(() => {
+    activeRunRef.current?.controller.abort();
+    activeRunRef.current = null;
   }, []);
 
   const updateConnection = useCallback((nextStatus, nextMessage) => {
@@ -35,55 +57,70 @@ export function BackendConnectionProvider({ children }) {
         return false;
       }
 
-      const activeRunId = ++runIdRef.current;
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        updateConnection('offline', 'You appear to be offline. Please reconnect to the internet.');
+        return Promise.resolve(false);
+      }
+      if (activeRunRef.current) return activeRunRef.current.promise;
+
+      const run = { controller: new AbortController(), promise: null };
+      activeRunRef.current = run;
       updateConnection('connecting', manual ? 'Retrying connection to Rabs Data...' : 'Connecting to Rabs Data...');
 
-      const startedAt = Date.now();
-      const retryDelays = getRetryDelays();
-      const maxWaitMs = getMaxWaitMs();
-      let retryIndex = 0;
+      run.promise = (async () => {
+        const deadline = Date.now() + getMaxWaitMs();
+        let retryIndex = 0;
 
-      while (Date.now() - startedAt < maxWaitMs) {
-        if (activeRunId !== runIdRef.current) return false;
-
-        if (typeof navigator !== 'undefined' && !navigator.onLine) {
-          updateConnection('offline', 'You appear to be offline. Please reconnect to the internet.');
-          return false;
-        }
-
-        const controller = new AbortController();
-        abortRef.current = controller;
-
-        try {
-          const response = await fetch(`${getApiBaseUrl()}/health`, {
-            method: 'GET',
-            signal: controller.signal,
-            cache: 'no-store',
-          });
-
-          if (response.ok) {
-            updateConnection('connected', 'Connected');
-            return true;
+        while (Date.now() < deadline && !run.controller.signal.aborted) {
+          if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            updateConnection('offline', 'You appear to be offline. Please reconnect to the internet.');
+            return false;
           }
-        } catch (error) {
-          if (error?.name === 'AbortError') return false;
-        } finally {
-          if (abortRef.current === controller) abortRef.current = null;
+
+          const requestController = new AbortController();
+          const abortRequest = () => requestController.abort();
+          run.controller.signal.addEventListener('abort', abortRequest, { once: true });
+          const remainingMs = deadline - Date.now();
+          const requestTimer = window.setTimeout(abortRequest, Math.min(remainingMs, 10000));
+
+          try {
+            const response = await fetch(`${getApiBaseUrl()}/health`, {
+              method: 'GET',
+              signal: requestController.signal,
+              cache: 'no-store',
+            });
+
+            if (run.controller.signal.aborted) return false;
+            if (response.ok) {
+              updateConnection('connected', 'Rabs Data API is responding.');
+              return true;
+            }
+          } catch {
+            if (run.controller.signal.aborted) return false;
+          } finally {
+            window.clearTimeout(requestTimer);
+            run.controller.signal.removeEventListener('abort', abortRequest);
+          }
+
+          if (run.controller.signal.aborted) return false;
+          updateConnection('backend_waking', 'Our server is waking up. Please wait.');
+
+          const delayMs = Math.min(getRetryDelay(retryIndex), deadline - Date.now());
+          retryIndex += 1;
+          if (!(await wait(delayMs, run.controller.signal))) return false;
         }
 
-        if (activeRunId !== runIdRef.current) return false;
+        if (!run.controller.signal.aborted) {
+          updateConnection('backend_unavailable', 'Rabs Data is taking longer than expected to respond. Please try again.');
+        }
+        return false;
+      })();
 
-        updateConnection('backend_waking', 'Rabs Data is waking up. Please wait...');
-
-        const delayMs = retryDelays[Math.min(retryIndex, retryDelays.length - 1)] + Math.random() * RETRY_JITTER_MS;
-        retryIndex += 1;
-        await wait(delayMs);
-      }
-
-      if (activeRunId === runIdRef.current) {
-        updateConnection('backend_unavailable', 'Rabs Data is taking longer than expected to respond. Please try again.');
-      }
-      return false;
+      const clearRun = () => {
+        if (activeRunRef.current === run) activeRunRef.current = null;
+      };
+      run.promise.then(clearRun, clearRun);
+      return run.promise;
     },
     [updateConnection]
   );
@@ -96,26 +133,29 @@ export function BackendConnectionProvider({ children }) {
         updateConnection('offline', 'You appear to be offline. Please reconnect to the internet.');
         return false;
       }
+      if (force) cancelHealthCheck();
       return runHealthCheck(Boolean(options.manual));
     },
-    [runHealthCheck, status, updateConnection]
+    [cancelHealthCheck, runHealthCheck, status, updateConnection]
   );
 
   const retryConnection = useCallback(() => {
-    clearInFlight();
-    runIdRef.current += 1;
+    cancelHealthCheck();
     return runHealthCheck(true);
-  }, [clearInFlight, runHealthCheck]);
+  }, [cancelHealthCheck, runHealthCheck]);
 
   useEffect(() => {
-    void runHealthCheck(false);
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) void runHealthCheck(false);
+    });
 
     const handleOnline = () => {
       void runHealthCheck(true);
     };
 
     const handleOffline = () => {
-      clearInFlight();
+      cancelHealthCheck();
       updateConnection('offline', 'You appear to be offline. Please reconnect to the internet.');
     };
 
@@ -123,12 +163,12 @@ export function BackendConnectionProvider({ children }) {
     window.addEventListener('offline', handleOffline);
 
     return () => {
-      clearInFlight();
-      runIdRef.current += 1;
+      active = false;
+      cancelHealthCheck();
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [clearInFlight, runHealthCheck, updateConnection]);
+  }, [cancelHealthCheck, runHealthCheck, updateConnection]);
 
   const value = useMemo(
     () => ({

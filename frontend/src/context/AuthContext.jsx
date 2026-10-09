@@ -1,17 +1,21 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import * as authService from '../services/authService.js';
 import { TOKEN_KEY } from '../services/api.js';
+import { useBackendConnection } from './BackendConnectionContext.jsx';
 import { local, session } from '../utils/storage.js';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
+  const { status, isWaiting } = useBackendConnection();
   const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(Boolean(local.get(TOKEN_KEY)));
+  const [sessionRestored, setSessionRestored] = useState(() => !local.get(TOKEN_KEY));
+  const loading = !sessionRestored && (isWaiting || status === 'connected');
 
   // Restore the session if a token is saved. Guests skip this entirely.
   useEffect(() => {
-    if (!local.get(TOKEN_KEY)) return undefined;
+    if (sessionRestored || !local.get(TOKEN_KEY) || status !== 'connected') return undefined;
+
     let active = true;
     authService
       .getMe()
@@ -19,11 +23,11 @@ export function AuthProvider({ children }) {
       .catch(() => {
         /* A 401 already cleared the token. A network error keeps it for next time. */
       })
-      .finally(() => active && setLoading(false));
+      .finally(() => active && setSessionRestored(true));
     return () => {
       active = false;
     };
-  }, []);
+  }, [sessionRestored, status]);
 
   useEffect(() => {
     const onExpired = () => {

@@ -10,7 +10,7 @@ import './Login.css';
 
 export default function Login() {
   const { login } = useAuth();
-  const { waitForBackend, retryConnection, status, message } = useBackendConnection();
+  const { waitForBackend, status, message } = useBackendConnection();
   const navigate = useNavigate();
   const location = useLocation();
   const from = location.state?.from || '/buy';
@@ -61,8 +61,6 @@ export default function Login() {
         <Link to="/buy">buy data without one</Link>.
       </p>
 
-      {status === 'offline' && <Alert type="warning" onRetry={retryConnection} retryLabel="Retry connection">{message}</Alert>}
-      {status === 'backend_unavailable' && <Alert onRetry={retryConnection} retryLabel="Retry connection">{message}</Alert>}
       {loading && <Loader label={waitingLabel} />}
 
       <form className="card" onSubmit={handleSubmit} noValidate>

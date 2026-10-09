@@ -11,7 +11,7 @@ import './Register.css';
 
 export default function Register() {
   const { register } = useAuth();
-  const { waitForBackend, retryConnection, status, message } = useBackendConnection();
+  const { waitForBackend, status, message } = useBackendConnection();
   const navigate = useNavigate();
 
   const [form, setForm] = useState({ name: '', email: '', phone: '', password: '' });
@@ -91,8 +91,6 @@ export default function Register() {
         Optional. You get a wallet and your order history. You can still <Link to="/buy">buy without one</Link>.
       </p>
 
-      {status === 'offline' && <Alert type="warning" onRetry={retryConnection} retryLabel="Retry connection">{message}</Alert>}
-      {status === 'backend_unavailable' && <Alert onRetry={retryConnection} retryLabel="Retry connection">{message}</Alert>}
       {loading && <Loader label={waitingLabel} />}
 
       <form className="card" onSubmit={handleSubmit} noValidate>

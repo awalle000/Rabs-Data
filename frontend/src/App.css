@@ -1,3 +1,44 @@
 .app-root {
   min-height: 100vh;
 }
+
+.app-connection {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  min-height: 2.75rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-info-soft);
+  color: var(--color-info);
+  font-size: 0.9rem;
+}
+
+.app-connection__spinner {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: app-connection-spin 0.8s linear infinite;
+}
+
+.app-connection--alert {
+  flex-wrap: wrap;
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+@keyframes app-connection-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-connection__spinner {
+    animation-duration: 2s;
+  }
+}

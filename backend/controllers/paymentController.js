@@ -131,6 +131,8 @@ export const getPaymentConfig = asyncHandler(async (req, res) => {
     success: true,
     provider: env.payment.provider,
     isConfigured,
+    deliveryConfigured: isDataProviderConfigured(),
+    allowPaymentsWithoutDelivery: env.allowPaymentsWithoutDelivery,
     feePassedToCustomer: env.payment.passFeesToCustomer,
     feePercentage: env.payment.feePercentage,
     currency: env.currency,

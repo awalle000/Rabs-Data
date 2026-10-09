@@ -24,11 +24,30 @@ import AdminTransactions from './pages/AdminTransactions/AdminTransactions.jsx';
 import AdminProfit from './pages/AdminProfit/AdminProfit.jsx';
 import AdminRegister from './pages/AdminRegister/AdminRegister.jsx';
 import NotFound from './pages/NotFound/NotFound.jsx';
+import { useBackendConnection } from './context/BackendConnectionContext.jsx';
 import './App.css';
 
 function App() {
+  const connection = useBackendConnection();
+
   return (
     <div className="app-root">
+      {connection.isWaiting && (
+        <div className="app-connection" role="status" aria-live="polite">
+          <span className="app-connection__spinner" aria-hidden="true" />
+          <strong>Rabs Data</strong>
+          <span>{connection.status === 'backend_waking' ? 'Our server is waking up. Please wait.' : 'Connecting to Rabs Data...'}</span>
+        </div>
+      )}
+      {(connection.isOffline || connection.isUnavailable) && (
+        <div className="app-connection app-connection--alert" role="status">
+          <strong>Rabs Data</strong>
+          <span>{connection.message}</span>
+          <button type="button" className="btn btn--ghost btn--sm" onClick={connection.retryConnection}>
+            Retry
+          </button>
+        </div>
+      )}
       <Routes>
         <Route element={<PublicLayout />}>
           {/* Open to everyone, no account needed */}

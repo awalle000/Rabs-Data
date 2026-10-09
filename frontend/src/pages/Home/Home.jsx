@@ -77,9 +77,6 @@ export default function Home() {
         <h2 id="networks-title" className="home-section__title">
           Choose your network
         </h2>
-        {connection.isWaiting && <Loader label={connection.status === 'backend_waking' ? 'Rabs Data is waking up. Please wait...' : 'Connecting to Rabs Data...'} />}
-        {connection.isOffline && <Alert type="warning" onRetry={connection.retryConnection} retryLabel="Retry connection">{connection.message}</Alert>}
-        {connection.isUnavailable && <Alert onRetry={connection.retryConnection} retryLabel="Retry connection">{connection.message}</Alert>}
         {!connection.isWaiting && !connection.isOffline && !connection.isUnavailable && loading && <Loader label="Loading networks..." />}
         {!connection.isWaiting && !connection.isOffline && !connection.isUnavailable && error && <Alert onRetry={reload}>{error}</Alert>}
         {data && (

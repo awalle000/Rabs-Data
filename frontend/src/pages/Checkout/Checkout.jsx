@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { useBackendConnection } from '../../context/BackendConnectionContext.jsx';
 import { useOrderDraft } from '../../context/OrderDraftContext.jsx';
 import useAsync from '../../hooks/useAsync.js';
 import * as orderService from '../../services/orderService.js';
@@ -16,6 +17,7 @@ import './Checkout.css';
 export default function Checkout() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const connection = useBackendConnection();
   const { draft, clearDraft } = useOrderDraft();
   const pkg = draft.package;
 
@@ -30,13 +32,26 @@ export default function Checkout() {
   }, [pkg, draft.recipientPhone, navigate]);
 
   // Wallet balance is only fetched for logged-in customers.
-  const wallet = useAsync(() => (user ? paymentService.getWallet() : Promise.resolve(null)), [user?._id]);
+  const wallet = useAsync(
+    () => (connection.isConnected && user ? paymentService.getWallet() : Promise.resolve(null)),
+    [user?._id, connection.isConnected],
+    { immediate: connection.isConnected }
+  );
   const walletInfo = wallet.data?.wallet;
   const walletAvailable = Boolean(user && walletInfo && walletInfo.fundingEnabled !== false);
   const walletShort = walletAvailable && walletInfo.balance < (pkg?.sellingPrice || 0);
 
   // Payment configuration (Hubtel fee pass-through and settings)
-  const paymentConfig = useAsync(paymentService.getPaymentConfig, []);
+  const paymentConfig = useAsync(
+    () => (connection.isConnected ? paymentService.getPaymentConfig() : Promise.resolve(null)),
+    [connection.isConnected],
+    { immediate: connection.isConnected }
+  );
+  const deliveryConfigured = paymentConfig.data?.deliveryConfigured !== false;
+  const canPayDirect = Boolean(
+    paymentConfig.data?.isConfigured && (deliveryConfigured || paymentConfig.data?.allowPaymentsWithoutDelivery)
+  );
+  const canPayWallet = Boolean(deliveryConfigured && walletAvailable);
   const feePassedToCustomer = Boolean(paymentConfig.data?.feePassedToCustomer);
   const feePercentage = Number(paymentConfig.data?.feePercentage) || 1.95;
 
@@ -50,6 +65,18 @@ export default function Checkout() {
 
   const handlePay = async () => {
     setError(null);
+    if (!connection.isConnected) {
+      setError({ message: connection.message });
+      return;
+    }
+    if ((method === 'direct' && !canPayDirect) || (method === 'wallet' && !canPayWallet)) {
+      setError({
+        message: !deliveryConfigured
+          ? 'Data delivery is not available yet. Your order will not be submitted.'
+          : 'Online payments are not available yet. Please try again later.',
+      });
+      return;
+    }
     if (email && !isValidEmail(email)) {
       setError({ message: 'Enter a valid email address, or leave it blank.' });
       return;
@@ -135,6 +162,13 @@ export default function Checkout() {
         </div>
 
         <div className="checkout__side card">
+          {connection.isConnected && paymentConfig.error && <Alert onRetry={paymentConfig.reload}>{paymentConfig.error}</Alert>}
+          {connection.isConnected && method === 'direct' && paymentConfig.data?.isConfigured === false && (
+            <Alert>Online payments are temporarily unavailable. Your order will not be submitted.</Alert>
+          )}
+          {connection.isConnected && paymentConfig.data?.deliveryConfigured === false && !paymentConfig.data?.allowPaymentsWithoutDelivery && (
+            <Alert>Data delivery is temporarily unavailable. Your order will not be submitted.</Alert>
+          )}
           {!user && (
             <p className="checkout__guest">
               You're checking out as a guest. <Link to="/login" state={{ from: '/checkout' }}>Log in</Link> to use a
@@ -155,7 +189,7 @@ export default function Checkout() {
                   name="method"
                   checked={method === 'wallet'}
                   onChange={() => setMethod('wallet')}
-                  disabled={walletShort || Boolean(created)}
+                  disabled={walletShort || Boolean(created) || !deliveryConfigured || paymentConfig.loading}
                 />
                 <span>
                   Wallet ({formatCurrency(walletInfo.balance)})
@@ -215,7 +249,12 @@ export default function Checkout() {
             </Alert>
           )}
 
-          <button type="button" className="btn btn--primary btn--lg btn--block" onClick={handlePay} disabled={submitting}>
+          <button
+            type="button"
+            className="btn btn--primary btn--lg btn--block"
+            onClick={handlePay}
+            disabled={submitting || !connection.isConnected || paymentConfig.loading || Boolean(paymentConfig.error) || (method === 'direct' ? !canPayDirect : !canPayWallet)}
+          >
             {submitting ? 'Please wait...' : `Pay ${formatCurrency(finalPayable)}`}
           </button>
           <p className="checkout__note">
