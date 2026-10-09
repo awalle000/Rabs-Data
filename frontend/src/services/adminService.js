@@ -19,6 +19,7 @@ export const deletePackage = (id) => api.delete(`/admin/packages/${id}`).then((r
 export const getTransactions = (params) => get('/admin/transactions', params);
 
 export const getSupplierBalance = () => get('/admin/supplier/balance');
+export const getSupplierSyncStatus = () => get('/admin/supplier/sync-status');
 export const syncSupplierBundles = () => api.post('/admin/supplier/sync-bundles').then((res) => res.data);
 export const checkOrderSupplierStatus = (id) =>
   api.post(`/admin/orders/${id}/check-supplier-status`).then((res) => res.data);

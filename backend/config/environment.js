@@ -75,6 +75,7 @@ const env = Object.freeze({
   remadata: {
     baseUrl: trimSlash(process.env.REMADATA_BASE_URL || process.env.DATA_PROVIDER_BASE_URL || 'https://remadata.com/api'),
     apiKey: process.env.REMADATA_API_KEY || process.env.DATA_PROVIDER_API_KEY || '',
+    syncIntervalMs: Number(process.env.REMADATA_SYNC_INTERVAL_MS) || 300000,
   },
   email: {
     from: process.env.EMAIL_FROM || 'Rabs Data <noreply@rabsdata.com>',

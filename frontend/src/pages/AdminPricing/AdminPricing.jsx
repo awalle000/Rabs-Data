@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import useAsync from '../../hooks/useAsync.js';
-import { getPackages, updatePackage, syncSupplierBundles } from '../../services/adminService.js';
+import {
+  getPackages,
+  updatePackage,
+  syncSupplierBundles,
+  getSupplierSyncStatus,
+} from '../../services/adminService.js';
 import { NETWORKS } from '../../utils/adminFormat.js';
 import { formatCurrency } from '../../utils/formatCurrency.js';
 import { getErrorMessage } from '../../utils/errors.js';
@@ -13,6 +18,7 @@ const num = (value) => (value === '' || value == null ? NaN : Number(value));
 
 export default function AdminPricing() {
   const { data, loading, error, reload } = useAsync(() => getPackages(), []);
+  const { data: syncData, reload: reloadSyncStatus } = useAsync(() => getSupplierSyncStatus(), []);
   const [edits, setEdits] = useState({}); // id -> { providerCost, sellingPrice } as typed
   const [rowErrors, setRowErrors] = useState({});
   const [savingIds, setSavingIds] = useState([]);
@@ -102,6 +108,7 @@ export default function AdminPricing() {
         text: res.message || 'Bundles synced from RemaData successfully.',
       });
       reload();
+      reloadSyncStatus();
     } catch (err) {
       setNotice({
         type: 'danger',
@@ -221,6 +228,20 @@ export default function AdminPricing() {
       </div>
 
       {notice && <Alert type={notice.type}>{notice.text}</Alert>}
+
+      {syncData && (
+        <div className="card pricing__sync-status" style={{ marginBottom: '1rem' }}>
+          <strong>Supplier sync status</strong>
+          <div className="muted">
+            Status: {syncData.status || 'idle'}
+            {syncData.lastSuccessfulAt ? ` · Last successful sync: ${new Date(syncData.lastSuccessfulAt).toLocaleString()}` : ' · No successful sync yet'}
+            {syncData.lastError ? ` · Last error: ${syncData.lastError}` : ''}
+          </div>
+          <div className="muted">
+            Added: {syncData.summary?.added || 0} · Updated: {syncData.summary?.updated || 0} · Unavailable: {syncData.summary?.unavailable || 0} · Deactivated: {syncData.summary?.deactivated || 0}
+          </div>
+        </div>
+      )}
 
       {packages.length === 0 && (
         <Alert type="info">No packages yet. Add some on the Packages page first.</Alert>

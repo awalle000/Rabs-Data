@@ -22,10 +22,16 @@ export default function BuyData() {
   const { data, loading, error, reload } = useAsync(getCatalog, [], { immediate: false });
 
   useEffect(() => {
-    if (connection.isConnected && !data) {
-      reload();
-    }
-  }, [connection.isConnected, data, reload]);
+    if (!connection.isConnected) return;
+
+    const refreshCatalog = () => {
+      void reload();
+    };
+
+    refreshCatalog();
+    const timer = window.setInterval(refreshCatalog, 120000);
+    return () => window.clearInterval(timer);
+  }, [connection.isConnected, reload]);
 
   const [network, setNetwork] = useState(searchParams.get('network') || draft.network || '');
   const [selectedId, setSelectedId] = useState(searchParams.get('package') || draft.package?._id || '');

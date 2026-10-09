@@ -31,10 +31,16 @@ export default function Home() {
   const { data, loading, error, reload } = useAsync(getCatalog, [], { immediate: false });
 
   useEffect(() => {
-    if (connection.isConnected && !data) {
-      reload();
-    }
-  }, [connection.isConnected, data, reload]);
+    if (!connection.isConnected) return;
+
+    const refreshCatalog = () => {
+      void reload();
+    };
+
+    refreshCatalog();
+    const timer = window.setInterval(refreshCatalog, 120000);
+    return () => window.clearInterval(timer);
+  }, [connection.isConnected, reload]);
 
   const popular = useMemo(() => {
     const byNetwork = {};

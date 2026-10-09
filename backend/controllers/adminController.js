@@ -7,6 +7,7 @@ import { NETWORK_CODES } from '../config/networks.js';
 import { creditWallet } from '../services/walletService.js';
 import * as dataProvider from '../services/dataProviderService.js';
 import * as remadata from '../services/remadataService.js';
+import { getCatalogSyncStatus, syncSupplierCatalog } from '../services/remadataSyncService.js';
 import { applyProviderResult } from '../services/orderFulfillmentService.js';
 import AppError from '../utils/AppError.js';
 import asyncHandler from '../utils/asyncHandler.js';
@@ -356,54 +357,30 @@ export const getSupplierBalance = asyncHandler(async (req, res) => {
   });
 });
 
+export const getSupplierSyncStatus = asyncHandler(async (req, res) => {
+  const status = await getCatalogSyncStatus();
+  res.json({ success: true, ...status });
+});
+
 export const syncSupplierBundles = asyncHandler(async (req, res) => {
-  if (!dataProvider.isDataProviderConfigured()) {
-    throw new AppError('RemaData supplier is not configured. Set REMADATA_API_KEY first.', 400);
-  }
+  const result = await syncSupplierCatalog({ force: true });
 
-  const bundles = await dataProvider.getAvailablePackages();
-  let createdCount = 0;
-  let updatedCount = 0;
-
-  for (const item of bundles) {
-    const existing = await DataPackage.findOne({
-      network: item.network,
-      name: item.name,
+  if (result.skipped) {
+    return res.status(202).json({
+      success: false,
+      skipped: true,
+      message: result.message || 'A RemaData catalog sync is already in progress.',
+      status: result.status,
+      lastStartedAt: result.lastStartedAt,
     });
-
-    if (existing) {
-      existing.providerCost = item.cost;
-      existing.volumeInMB = item.volumeInMB;
-      existing.providerPackageCode = item.providerPackageCode;
-      existing.dataAmount = item.dataAmount;
-      if (existing.sellingPrice < item.cost) {
-        existing.sellingPrice = roundMoney(item.cost + 1.0);
-      }
-      await existing.save();
-      updatedCount += 1;
-    } else {
-      const defaultSellingPrice = roundMoney(item.cost + 1.0);
-      await DataPackage.create({
-        network: item.network,
-        name: item.name,
-        dataAmount: item.dataAmount,
-        validity: '30 days',
-        volumeInMB: item.volumeInMB,
-        providerCost: item.cost,
-        sellingPrice: defaultSellingPrice,
-        providerPackageCode: item.providerPackageCode,
-        isActive: true,
-      });
-      createdCount += 1;
-    }
   }
 
   res.json({
-    success: true,
-    message: `Bundles synchronized successfully. Created: ${createdCount}, Updated: ${updatedCount}.`,
-    createdCount,
-    updatedCount,
-    totalBundles: bundles.length,
+    success: result.success,
+    message: result.message || 'RemaData catalog sync completed.',
+    summary: result.summary,
+    status: result.status,
+    skipped: result.skipped,
   });
 });
 

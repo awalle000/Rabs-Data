@@ -11,6 +11,7 @@ import {
   deletePackage,
   getTransactions,
   getSupplierBalance,
+  getSupplierSyncStatus,
   syncSupplierBundles,
   checkOrderSupplierStatus,
   getSupplierOrders,
@@ -50,6 +51,7 @@ router.delete('/packages/:id', mongoIdParam('id'), validate, deletePackage);
 router.get('/transactions', getTransactions);
 
 router.get('/supplier/balance', getSupplierBalance);
+router.get('/supplier/sync-status', getSupplierSyncStatus);
 router.post('/supplier/sync-bundles', syncSupplierBundles);
 router.get('/supplier/orders', getSupplierOrders);
 
