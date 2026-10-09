@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import useAsync from '../../hooks/useAsync.js';
+import { useBackendConnection } from '../../context/BackendConnectionContext.jsx';
 import { getCatalog } from '../../services/dataService.js';
 import { useOrderDraft } from '../../context/OrderDraftContext.jsx';
 import { normalizePhone } from '../../utils/formatPhone.js';
@@ -17,7 +18,14 @@ export default function BuyData() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { draft, updateDraft } = useOrderDraft();
-  const { data, loading, error, reload } = useAsync(getCatalog, []);
+  const connection = useBackendConnection();
+  const { data, loading, error, reload } = useAsync(getCatalog, [], { immediate: false });
+
+  useEffect(() => {
+    if (connection.isConnected && !data) {
+      reload();
+    }
+  }, [connection.isConnected, data, reload]);
 
   const [network, setNetwork] = useState(searchParams.get('network') || draft.network || '');
   const [selectedId, setSelectedId] = useState(searchParams.get('package') || draft.package?._id || '');
@@ -66,8 +74,11 @@ export default function BuyData() {
       <h1 className="page__title">Buy Data</h1>
       <p className="page__subtitle">No account needed. It takes less than a minute.</p>
 
-      {loading && <Loader label="Loading bundles..." />}
-      {error && <Alert onRetry={reload}>{error}</Alert>}
+      {connection.isWaiting && <Loader label={connection.status === 'backend_waking' ? 'Rabs Data is waking up. Please wait...' : 'Connecting to Rabs Data...'} />}
+      {connection.isOffline && <Alert type="warning" onRetry={connection.retryConnection} retryLabel="Retry connection">{connection.message}</Alert>}
+      {connection.isUnavailable && <Alert onRetry={connection.retryConnection} retryLabel="Retry connection">{connection.message}</Alert>}
+      {!connection.isWaiting && !connection.isOffline && !connection.isUnavailable && loading && <Loader label="Loading bundles..." />}
+      {!connection.isWaiting && !connection.isOffline && !connection.isUnavailable && error && <Alert onRetry={reload}>{error}</Alert>}
 
       {data && networks.length === 0 && (
         <EmptyState icon="package" title="No networks available" message="Please check back shortly." />

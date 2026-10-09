@@ -16,6 +16,11 @@ export const getOrCreateWallet = async (userId) => {
   }
 };
 
+export const canDebitWallet = ({ balance, amount }) => {
+  const value = roundMoney(amount);
+  return Number(balance) >= value - 0.005;
+};
+
 export const creditWallet = async ({
   userId,
   amount,

@@ -30,7 +30,7 @@ if (isProduction && !(process.env.API_PUBLIC_URL || '').startsWith('https://')) 
   process.exit(1);
 }
 
-const clientUrls = list(process.env.CLIENT_URL);
+const clientUrls = list(process.env.CLIENT_URL || process.env.CLIENT_URLS || process.env.CORS_ORIGIN);
 if (!isProduction) {
   ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000'].forEach((u) => {
     if (!clientUrls.includes(u)) clientUrls.push(u);

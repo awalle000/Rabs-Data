@@ -1,14 +1,17 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { useBackendConnection } from '../../context/BackendConnectionContext.jsx';
 import { isValidEmail, validateName, validatePassword } from '../../utils/validators.js';
 import { normalizePhone, formatPhoneInput } from '../../utils/formatPhone.js';
 import { getErrorMessage } from '../../utils/errors.js';
 import Alert from '../../components/Alert/Alert.jsx';
+import Loader from '../../components/Loader/Loader.jsx';
 import './Register.css';
 
 export default function Register() {
   const { register } = useAuth();
+  const { waitForBackend, retryConnection, status, message } = useBackendConnection();
   const navigate = useNavigate();
 
   const [form, setForm] = useState({ name: '', email: '', phone: '', password: '' });
@@ -23,6 +26,7 @@ export default function Register() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (loading) return;
     setApiError('');
 
     const next = {
@@ -36,6 +40,13 @@ export default function Register() {
 
     setLoading(true);
     try {
+      const backendReady = await waitForBackend();
+      if (!backendReady) {
+        setApiError(message || 'Rabs Data is taking longer than expected to respond. Please try again.');
+        setLoading(false);
+        return;
+      }
+
       await register({
         name: form.name.trim(),
         email: form.email.trim(),
@@ -71,12 +82,18 @@ export default function Register() {
     </div>
   );
 
+  const waitingLabel = status === 'backend_waking' ? 'Rabs Data is waking up. Please wait...' : 'Connecting to Rabs Data...';
+
   return (
     <div className="container page register">
       <h1 className="page__title">Create an account</h1>
       <p className="page__subtitle">
         Optional. You get a wallet and your order history. You can still <Link to="/buy">buy without one</Link>.
       </p>
+
+      {status === 'offline' && <Alert type="warning" onRetry={retryConnection} retryLabel="Retry connection">{message}</Alert>}
+      {status === 'backend_unavailable' && <Alert onRetry={retryConnection} retryLabel="Retry connection">{message}</Alert>}
+      {loading && <Loader label={waitingLabel} />}
 
       <form className="card" onSubmit={handleSubmit} noValidate>
         {apiError && <Alert>{apiError}</Alert>}
@@ -86,8 +103,8 @@ export default function Register() {
         {field('password', 'Password', { type: 'password', autoComplete: 'new-password' })}
         <p className="field__hint register__hint">At least 8 characters, with a letter and a number.</p>
 
-        <button type="submit" className="btn btn--primary btn--lg btn--block" disabled={loading}>
-          {loading ? 'Creating account...' : 'Create account'}
+        <button type="submit" className="btn btn--primary btn--lg btn--block" disabled={loading || status === 'connecting' || status === 'backend_waking'}>
+          {loading ? waitingLabel : 'Create account'}
         </button>
         <p className="register__switch">
           Already have an account? <Link to="/login">Log in</Link>

@@ -10,6 +10,7 @@ import AppError from '../utils/AppError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { roundMoney } from '../utils/money.js';
 import { getPagination, buildMeta } from '../utils/pagination.js';
+import { getPurchaseOperationState, markPurchaseOperationCreated } from '../utils/purchaseIdempotency.js';
 
 import { parseVolumeInMB } from '../services/remadataService.js';
 import { calculateOrderPricing, calculateProfits } from '../utils/paymentFees.js';
@@ -24,6 +25,40 @@ const inFlightOrders = new Set();
 export const createOrder = asyncHandler(async (req, res) => {
   const { packageId, recipientPhone, paymentMethod = 'direct' } = req.body;
   const buyer = req.user || null;
+  const idempotencyKey = req.body.idempotencyKey || undefined;
+  const operationState = await getPurchaseOperationState({
+    key: idempotencyKey,
+    customerId: buyer?._id,
+    payload: {
+      packageId,
+      recipientPhone,
+      paymentMethod,
+      contactPhone: req.body.contactPhone || buyer?.phone || recipientPhone,
+      contactEmail: req.body.contactEmail || buyer?.email,
+    },
+  });
+
+  if (!operationState.isNew && operationState.operation?.order) {
+    const existingOrder = await Order.findById(operationState.operation.order);
+    if (existingOrder) {
+      return res.status(200).json({
+        success: true,
+        order: existingOrder.toCustomerJSON(),
+        idempotencyKey: operationState.key,
+        duplicate: true,
+        status: operationState.operation.status,
+      });
+    }
+  }
+
+  if (!operationState.isNew && operationState.operation?.status === 'processing' && !operationState.operation?.order) {
+    return res.status(202).json({
+      success: true,
+      message: 'A purchase with this key is already being processed.',
+      idempotencyKey: operationState.key,
+      status: operationState.operation.status,
+    });
+  }
 
   if (paymentMethod === 'wallet') {
     if (!env.walletEnabled) throw new AppError('Wallet payments are not available', 400);
@@ -82,62 +117,77 @@ export const createOrder = asyncHandler(async (req, res) => {
   });
 
     order = await Order.create({
-    orderId,
-    customer: buyer?._id,
-    contactPhone,
-    contactEmail,
-    network: dataPackage.network,
-    dataPackage: dataPackage._id,
-    packageName: dataPackage.name,
-    dataAmount: dataPackage.dataAmount,
-    volumeInMB,
-    validity: dataPackage.validity,
-    providerPackageCode: dataPackage.providerPackageCode,
-    recipientPhone,
-    sellingPrice: dataPackage.sellingPrice,
-    baseProductPrice: pricing.baseProductPrice,
-    customerChargedAmount: pricing.customerChargedAmount,
-    paymentGatewayFee: pricing.paymentGatewayFee,
-    providerCost: dataPackage.providerCost,
-    profit: profits.grossProfit,
-    grossProfit: profits.grossProfit,
-    netProfit: profits.netProfit,
-    supplier: 'RemaData',
-    supplierCost: dataPackage.providerCost,
-    supplierClientReference: orderId,
-    supplierStatus: 'not_started',
-    paymentMethod,
-    paymentStatus: 'pending',
-    status: 'pending',
-  });
+      orderId,
+      purchaseOperation: operationState.operation?._id || null,
+      customer: buyer?._id,
+      contactPhone,
+      contactEmail,
+      network: dataPackage.network,
+      dataPackage: dataPackage._id,
+      packageName: dataPackage.name,
+      dataAmount: dataPackage.dataAmount,
+      volumeInMB,
+      validity: dataPackage.validity,
+      providerPackageCode: dataPackage.providerPackageCode,
+      recipientPhone,
+      sellingPrice: dataPackage.sellingPrice,
+      baseProductPrice: pricing.baseProductPrice,
+      customerChargedAmount: pricing.customerChargedAmount,
+      paymentGatewayFee: pricing.paymentGatewayFee,
+      providerCost: dataPackage.providerCost,
+      profit: profits.grossProfit,
+      grossProfit: profits.grossProfit,
+      netProfit: profits.netProfit,
+      supplier: 'RemaData',
+      supplierCost: dataPackage.providerCost,
+      supplierClientReference: orderId,
+      supplierStatus: 'not_started',
+      paymentMethod,
+      paymentStatus: 'pending',
+      status: 'pending',
+    });
 
-  if (paymentMethod === 'wallet') {
-    try {
-      await debitWallet({
-        userId: buyer._id,
-        amount: order.sellingPrice,
-        type: 'wallet_debit',
-        description: `Payment for ${order.orderId}`,
-        reference: order.orderId,
-        orderId: order._id,
-      });
-    } catch (error) {
-      await Order.deleteOne({ _id: order._id }); // no money moved, discard the order
-      throw error;
+    await markPurchaseOperationCreated({
+      key: operationState.key,
+      orderId: order._id,
+      paymentReference: null,
+      payload: {
+        packageId: dataPackage._id.toString(),
+        recipientPhone,
+        paymentMethod,
+        contactPhone,
+        contactEmail,
+      },
+    });
+
+    if (paymentMethod === 'wallet') {
+      try {
+        await debitWallet({
+          userId: buyer._id,
+          amount: order.sellingPrice,
+          type: 'wallet_debit',
+          description: `Payment for ${order.orderId}`,
+          reference: order.orderId,
+          orderId: order._id,
+        });
+      } catch (error) {
+        await Order.deleteOne({ _id: order._id }); // no money moved, discard the order
+        throw error;
+      }
+
+      const paid = await markOrderPaid(order._id, `WALLET-${order.orderId}`);
+      const finalOrder = paid ? await fulfillOrder(paid._id) : order;
+      return res.status(201).json({ success: true, order: finalOrder.toCustomerJSON() });
     }
 
-    const paid = await markOrderPaid(order._id, `WALLET-${order.orderId}`);
-    const finalOrder = paid ? await fulfillOrder(paid._id) : order;
-    return res.status(201).json({ success: true, order: finalOrder.toCustomerJSON() });
-  }
-
-  // Direct payment: the buyer now calls POST /api/payments/initialize.
-  // The tracking token is returned ONCE, here, so the guest's browser can keep it.
-  return res.status(201).json({
-    success: true,
-    order: order.toCustomerJSON(),
-    trackingToken: order.trackingToken,
-  });
+    // Direct payment: the buyer now calls POST /api/payments/initialize.
+    // The tracking token is returned ONCE, here, so the guest's browser can keep it.
+    return res.status(201).json({
+      success: true,
+      order: order.toCustomerJSON(),
+      trackingToken: order.trackingToken,
+      idempotencyKey: operationState.key,
+    });
   } finally {
     // Release in-flight lock after short delay so DB persistence is fully complete
     setTimeout(() => inFlightOrders.delete(lockKey), 3000);

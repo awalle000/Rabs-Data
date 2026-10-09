@@ -4,6 +4,11 @@ import { applyProviderResult } from '../services/orderFulfillmentService.js';
 import { notifyOrderUpdate } from '../services/notificationService.js';
 import AppError from '../utils/AppError.js';
 import asyncHandler from '../utils/asyncHandler.js';
+import {
+  registerWebhookEvent,
+  markWebhookEventProcessed,
+  markWebhookEventFailed,
+} from '../utils/webhookIdempotency.js';
 
 export const handleDataProviderWebhook = asyncHandler(async (req, res) => {
   const rawBody = req.body;
@@ -20,19 +25,38 @@ export const handleDataProviderWebhook = asyncHandler(async (req, res) => {
     return res.status(200).json({ received: true, ignored: true });
   }
 
-  const order = await Order.findOne({ orderId: event.reference });
-  if (!order || order.status !== 'processing') {
-    return res.status(200).json({ received: true, ignored: true });
-  }
-
-  // Double-check with the provider instead of trusting the webhook body.
-  const result = await dataProvider.checkTransactionStatus({
-    reference: order.orderId,
-    providerReference: event.providerReference || order.providerReference,
+  const dedupe = await registerWebhookEvent({
+    provider: 'remadata',
+    reference: event.reference,
+    providerEventId: event.providerReference || null,
+    eventType: event.status || 'supplier_status',
+    payload: event,
   });
 
-  const updated = await applyProviderResult(order, result);
-  await notifyOrderUpdate(updated);
+  if (dedupe.isDuplicate) {
+    return res.status(200).json({ received: true, duplicate: true });
+  }
 
-  return res.status(200).json({ received: true });
+  try {
+    const order = await Order.findOne({ orderId: event.reference });
+    if (!order || order.status !== 'processing') {
+      await markWebhookEventProcessed(dedupe.eventHash, { status: 'processed' });
+      return res.status(200).json({ received: true, ignored: true });
+    }
+
+    // Double-check with the provider instead of trusting the webhook body.
+    const result = await dataProvider.checkTransactionStatus({
+      reference: order.orderId,
+      providerReference: event.providerReference || order.providerReference,
+    });
+
+    const updated = await applyProviderResult(order, result);
+    await notifyOrderUpdate(updated);
+    await markWebhookEventProcessed(dedupe.eventHash, { status: 'processed' });
+
+    return res.status(200).json({ received: true });
+  } catch (error) {
+    await markWebhookEventFailed(dedupe.eventHash, error, true);
+    throw error;
+  }
 });

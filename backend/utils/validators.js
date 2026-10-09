@@ -136,6 +136,13 @@ export const createOrderRules = [
     .optional()
     .isIn(['direct', 'wallet'])
     .withMessage('Payment method must be direct or wallet'),
+  body('idempotencyKey')
+    .optional({ values: 'falsy' })
+    .trim()
+    .isLength({ min: 16, max: 128 })
+    .withMessage('The idempotency key must be 16 to 128 characters long')
+    .matches(/^[A-Za-z0-9_-]+$/)
+    .withMessage('The idempotency key contains invalid characters'),
 ];
 
 export const lookupOrderRules = [

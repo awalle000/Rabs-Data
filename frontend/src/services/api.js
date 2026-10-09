@@ -3,8 +3,14 @@ import { local } from '../utils/storage.js';
 
 export const TOKEN_KEY = 'maridata_token';
 
+export const getApiBaseUrl = () => {
+  const raw = (import.meta.env.VITE_API_URL || 'http://localhost:5000').trim();
+  const normalized = raw.replace(/\/+$/, '');
+  return normalized.endsWith('/api') ? normalized : `${normalized}/api`;
+};
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
+  baseURL: getApiBaseUrl(),
   timeout: 20000,
   headers: { 'Content-Type': 'application/json' },
 });

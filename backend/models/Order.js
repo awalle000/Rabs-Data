@@ -15,6 +15,7 @@ export const ORDER_STATUSES = [
 const orderSchema = new mongoose.Schema(
   {
     orderId: { type: String, required: true, unique: true },
+    purchaseOperation: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseOperation', default: null, index: true },
     // Optional: guests buy without an account.
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
     contactPhone: { type: String, index: true },

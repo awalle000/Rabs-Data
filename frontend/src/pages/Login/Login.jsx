@@ -1,13 +1,16 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { useBackendConnection } from '../../context/BackendConnectionContext.jsx';
 import { isValidEmail } from '../../utils/validators.js';
 import { getErrorMessage } from '../../utils/errors.js';
 import Alert from '../../components/Alert/Alert.jsx';
+import Loader from '../../components/Loader/Loader.jsx';
 import './Login.css';
 
 export default function Login() {
   const { login } = useAuth();
+  const { waitForBackend, retryConnection, status, message } = useBackendConnection();
   const navigate = useNavigate();
   const location = useLocation();
   const from = location.state?.from || '/buy';
@@ -22,6 +25,8 @@ export default function Login() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (loading) return;
+
     setApiError('');
     const next = {};
     if (!isValidEmail(form.email)) next.email = 'Enter a valid email address';
@@ -31,6 +36,13 @@ export default function Login() {
 
     setLoading(true);
     try {
+      const backendReady = await waitForBackend();
+      if (!backendReady) {
+        setApiError(message || 'Rabs Data is taking longer than expected to respond. Please try again.');
+        setLoading(false);
+        return;
+      }
+
       const user = await login({ email: form.email.trim(), password: form.password });
       navigate(user.role === 'admin' && from === '/buy' ? '/admin' : from, { replace: true });
     } catch (err) {
@@ -39,6 +51,8 @@ export default function Login() {
     }
   };
 
+  const waitingLabel = status === 'backend_waking' ? 'Rabs Data is waking up. Please wait...' : 'Connecting to Rabs Data...';
+
   return (
     <div className="container page auth">
       <h1 className="page__title">Log in</h1>
@@ -46,6 +60,10 @@ export default function Login() {
         An account is optional. It gives you a wallet and order history. You can always{' '}
         <Link to="/buy">buy data without one</Link>.
       </p>
+
+      {status === 'offline' && <Alert type="warning" onRetry={retryConnection} retryLabel="Retry connection">{message}</Alert>}
+      {status === 'backend_unavailable' && <Alert onRetry={retryConnection} retryLabel="Retry connection">{message}</Alert>}
+      {loading && <Loader label={waitingLabel} />}
 
       <form className="card" onSubmit={handleSubmit} noValidate>
         {apiError && <Alert>{apiError}</Alert>}
@@ -90,8 +108,8 @@ export default function Login() {
           </label>
         </div>
 
-        <button type="submit" className="btn btn--primary btn--lg btn--block" disabled={loading}>
-          {loading ? 'Logging in...' : 'Log in'}
+        <button type="submit" className="btn btn--primary btn--lg btn--block" disabled={loading || status === 'connecting' || status === 'backend_waking'}>
+          {loading ? waitingLabel : 'Log in'}
         </button>
         <p className="auth__switch">
           New here? <Link to="/register">Create an account</Link>

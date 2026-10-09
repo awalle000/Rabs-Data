@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import useAsync from '../../hooks/useAsync.js';
+import { useBackendConnection } from '../../context/BackendConnectionContext.jsx';
 import { getCatalog } from '../../services/dataService.js';
 import DataCard from '../../components/DataCard/DataCard.jsx';
 import Loader from '../../components/Loader/Loader.jsx';
@@ -26,7 +27,14 @@ const REASONS = [
 
 export default function Home() {
   const navigate = useNavigate();
-  const { data, loading, error, reload } = useAsync(getCatalog, []);
+  const connection = useBackendConnection();
+  const { data, loading, error, reload } = useAsync(getCatalog, [], { immediate: false });
+
+  useEffect(() => {
+    if (connection.isConnected && !data) {
+      reload();
+    }
+  }, [connection.isConnected, data, reload]);
 
   const popular = useMemo(() => {
     const byNetwork = {};
@@ -63,8 +71,11 @@ export default function Home() {
         <h2 id="networks-title" className="home-section__title">
           Choose your network
         </h2>
-        {loading && <Loader label="Loading networks..." />}
-        {error && <Alert onRetry={reload}>{error}</Alert>}
+        {connection.isWaiting && <Loader label={connection.status === 'backend_waking' ? 'Rabs Data is waking up. Please wait...' : 'Connecting to Rabs Data...'} />}
+        {connection.isOffline && <Alert type="warning" onRetry={connection.retryConnection} retryLabel="Retry connection">{connection.message}</Alert>}
+        {connection.isUnavailable && <Alert onRetry={connection.retryConnection} retryLabel="Retry connection">{connection.message}</Alert>}
+        {!connection.isWaiting && !connection.isOffline && !connection.isUnavailable && loading && <Loader label="Loading networks..." />}
+        {!connection.isWaiting && !connection.isOffline && !connection.isUnavailable && error && <Alert onRetry={reload}>{error}</Alert>}
         {data && (
           <ul className="home-networks">
             {data.networks.map((network) => (
@@ -84,7 +95,7 @@ export default function Home() {
         <h2 id="popular-title" className="home-section__title">
           Popular bundles
         </h2>
-        {loading && <Loader label="Loading bundles..." />}
+        {!connection.isWaiting && !connection.isOffline && !connection.isUnavailable && loading && <Loader label="Loading bundles..." />}
         {data && popular.length === 0 && (
           <EmptyState icon="package" title="Bundles are coming soon" message="Check back shortly for available data bundles." />
         )}

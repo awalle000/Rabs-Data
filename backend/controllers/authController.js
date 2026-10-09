@@ -7,15 +7,18 @@ import generateToken from '../utils/generateToken.js';
 import AppError from '../utils/AppError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 
+const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+
 export const register = asyncHandler(async (req, res) => {
   const { name, email, phone, password } = req.body;
+  const normalizedEmail = normalizeEmail(email);
 
-  if (await User.exists({ email })) {
+  if (await User.exists({ email: normalizedEmail })) {
     throw new AppError('An account with this email already exists', 409);
   }
 
   // Customers are always created as "customer". Admins come from the seed script.
-  const user = await User.create({ name, email, phone, password });
+  const user = await User.create({ name, email: normalizedEmail, phone, password });
   await getOrCreateWallet(user._id);
 
   res.status(201).json({ success: true, token: generateToken(user._id), user });
@@ -23,8 +26,9 @@ export const register = asyncHandler(async (req, res) => {
 
 export const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
+  const normalizedEmail = normalizeEmail(email);
 
-  const user = await User.findOne({ email }).select('+password');
+  const user = await User.findOne({ email: normalizedEmail }).select('+password');
   if (!user || !(await user.comparePassword(password))) {
     throw new AppError('Invalid email or password', 401);
   }

@@ -1,4 +1,4 @@
-import api from './api.js';
+import api, { getApiBaseUrl } from './api.js';
 
 const get = (url, params) => api.get(url, { params }).then((res) => res.data);
 
@@ -32,7 +32,7 @@ export const getAnalyticsByBundle = (params) => get('/admin/analytics/by-bundle'
 export const getAnalyticsOverTime = (params) => get('/admin/analytics/over-time', params);
 export const getAnalyticsRecentTransactions = (params) => get('/admin/analytics/recent-transactions', params);
 export const getAnalyticsExportUrl = (params) => {
-  const base = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+  const base = getApiBaseUrl();
   const qs = params && Object.keys(params).length ? `?${new URLSearchParams(params).toString()}` : '';
   return `${base}/admin/analytics/export-csv${qs}`;
 };

@@ -1,11 +1,11 @@
 import Payment from '../models/Payment.js';
-import { processPaymentReference } from '../services/orderFulfillmentService.js';
 import { isPaymentConfigured } from '../services/paymentService.js';
+import { safeReconcilePayment } from '../services/reconciliationService.js';
 
 const RUN_EVERY_MS = 60 * 1000;
-const FIRST_CHECK_AFTER_MS = 2 * 60 * 1000; // give the callback a chance first
+const FIRST_CHECK_AFTER_MS = 2 * 60 * 1000;
 const RECHECK_EVERY_MS = 5 * 60 * 1000;
-const GIVE_UP_AFTER_MS = 3 * 60 * 60 * 1000; // abandoned checkouts stop being polled
+const GIVE_UP_AFTER_MS = 3 * 60 * 60 * 1000;
 const BATCH_SIZE = 20;
 
 let running = false;
@@ -30,7 +30,7 @@ export const reconcilePendingPayments = async () => {
     for (const payment of due) {
       await Payment.updateOne({ _id: payment._id }, { $set: { lastCheckedAt: new Date() } });
       try {
-        await processPaymentReference(payment.reference);
+        await safeReconcilePayment({ payment });
       } catch (error) {
         console.error(`[reconcile] ${payment.reference}: ${error.message}`);
       }

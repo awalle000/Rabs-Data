@@ -23,7 +23,7 @@ export default function Checkout() {
   const [method, setMethod] = useState('direct');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null); // { message, code }
-  const [created, setCreated] = useState(null); // { order, token }
+  const [created, setCreated] = useState(null); // { order, token, idempotencyKey }
 
   useEffect(() => {
     if (!pkg || !draft.recipientPhone) navigate('/buy', { replace: true });
@@ -60,13 +60,15 @@ export default function Checkout() {
       // Step 1: create the order once. A retry only repeats the payment step.
       let current = created;
       if (!current) {
+        const idempotencyKey = created?.idempotencyKey || (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`);
         const response = await orderService.createOrder({
           packageId: pkg._id,
           recipientPhone: draft.recipientPhone,
           paymentMethod: method,
           contactEmail: email || undefined,
+          idempotencyKey,
         });
-        current = { order: response.order, token: response.trackingToken || null };
+        current = { order: response.order, token: response.trackingToken || null, idempotencyKey: response.idempotencyKey || idempotencyKey };
         setCreated(current);
 
         if (current.token) {

@@ -6,6 +6,7 @@ import * as dataProvider from './dataProviderService.js';
 import * as paymentService from './paymentService.js';
 import { creditWallet } from './walletService.js';
 import { notifyOrderUpdate } from './notificationService.js';
+import PurchaseOperation from '../models/PurchaseOperation.js';
 import AppError from '../utils/AppError.js';
 import { roundMoney } from '../utils/money.js';
 
@@ -21,6 +22,18 @@ const recordProviderTransaction = (order, status, providerReference, description
     providerReference,
     description,
   }).catch((error) => console.error('Ledger write failed:', error.message));
+
+const syncPurchaseOperationState = async (order, status) => {
+  if (!order?.purchaseOperation) return;
+
+  await PurchaseOperation.findByIdAndUpdate(order.purchaseOperation, {
+    $set: {
+      order: order._id,
+      status,
+      lastKnownState: { stage: status },
+    },
+  });
+};
 
 // Atomic: only one caller can move an order to "paid".
 export const markOrderPaid = (orderId, paymentReference, extraUpdates = {}) =>
@@ -102,6 +115,7 @@ export const applyProviderResult = async (order, result) => {
       { returnDocument: 'after' }
     );
     if (updated) {
+      await syncPurchaseOperationState(updated, 'fulfilled');
       await recordProviderTransaction(updated, 'successful', supplierRef, `Data delivered for ${updated.orderId}`);
       return updated;
     }
@@ -114,6 +128,7 @@ export const applyProviderResult = async (order, result) => {
       ? 'Data delivery could not be completed by supplier. Transaction refunded.'
       : (result.message || 'Data delivery failed. Please contact support.');
     const failed = await failOrder(order, reason);
+    await syncPurchaseOperationState(failed || order, 'failed');
     await recordProviderTransaction(order, 'failed', supplierRef, result.message || 'Provider reported failure');
     return failed;
   }

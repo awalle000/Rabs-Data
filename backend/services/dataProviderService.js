@@ -138,4 +138,44 @@ export const getProviderBalance = async () => {
 
 export const verifyWebhookSignature = () => false;
 
-export const parseWebhookEvent = () => null;
+export const parseWebhookEvent = (rawBody) => {
+  try {
+    const parsed = JSON.parse(rawBody.toString('utf8'));
+    const data = parsed?.Data || parsed?.data || parsed;
+    const reference =
+      data?.reference ||
+      data?.Reference ||
+      data?.clientReference ||
+      data?.ClientReference ||
+      data?.orderId ||
+      data?.order_id ||
+      data?.ref ||
+      null;
+    const providerReference =
+      data?.providerReference ||
+      data?.ProviderReference ||
+      data?.referenceNumber ||
+      data?.ReferenceNumber ||
+      data?.transactionId ||
+      data?.TransactionId ||
+      data?.ref_number ||
+      null;
+    const rawStatus = String(data?.status || data?.Status || data?.supplierStatus || data?.SupplierStatus || '').toLowerCase();
+    const normalizedStatus = rawStatus === 'completed' ? 'successful' : rawStatus === 'failed' ? 'failed' : rawStatus === 'refunded' ? 'refunded' : rawStatus || 'unknown';
+
+    return reference
+      ? {
+          reference: String(reference),
+          providerReference: providerReference ? String(providerReference) : null,
+          status: normalizedStatus,
+          amount: data?.amount ?? data?.Amount ?? null,
+          currency: data?.currency ?? data?.Currency ?? 'GHS',
+          supplierStatus: rawStatus || null,
+          message: data?.message || data?.Message || null,
+          raw: data,
+        }
+      : null;
+  } catch {
+    return null;
+  }
+};
