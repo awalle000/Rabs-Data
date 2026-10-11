@@ -129,6 +129,69 @@ test('admin push subscription APIs enforce admin auth, support multiple devices,
   }
 });
 
+test('genuine order alerts fan out across all authorized admin devices while test notifications stay device-specific', async () => {
+  const originalSendNotification = webPush.sendNotification;
+  const originalEventFind = AdminPushEvent.find;
+  const originalEventFindOneAndUpdate = AdminPushEvent.findOneAndUpdate;
+  const originalEventUpdateOne = AdminPushEvent.updateOne;
+  const originalUserFind = User.find;
+  const originalSubscriptionFind = AdminPushSubscription.find;
+  const sent = [];
+
+  const adminOne = '64d9e76af742f8ab3f1e29d1';
+  const adminTwo = '64d9e76af742f8ab3f1e29d2';
+  const allSubscriptions = [
+    { _id: 'sub-a-phone', admin: adminOne, endpoint: 'https://push.example.test/admin-one-phone', keys: { p256dh: 'a1', auth: 'a2' } },
+    { _id: 'sub-a-laptop', admin: adminOne, endpoint: 'https://push.example.test/admin-one-laptop', keys: { p256dh: 'b1', auth: 'b2' } },
+    { _id: 'sub-b-phone', admin: adminTwo, endpoint: 'https://push.example.test/admin-two-phone', keys: { p256dh: 'c1', auth: 'c2' } },
+    { _id: 'sub-b-laptop', admin: adminTwo, endpoint: 'https://push.example.test/admin-two-laptop', keys: { p256dh: 'd1', auth: 'd2' } },
+    { _id: 'sub-customer', admin: customerId, endpoint: 'https://push.example.test/customer-device', keys: { p256dh: 'e1', auth: 'e2' } },
+  ];
+
+  AdminPushEvent.find = () => ({
+    sort: () => ({
+      limit: () => ({
+        lean: async () => [{ _id: 'event-order-dispatch', eventId: 'order-created:multi-admin-order', status: 'queued', nextAttemptAt: new Date(0), attempts: 0, title: 'RabsData Admin', body: 'New order received. Tap to view the order.', url: '/admin/orders' }],
+      }),
+    }),
+  });
+  AdminPushEvent.findOneAndUpdate = async () => ({ _id: 'event-order-dispatch', eventId: 'order-created:multi-admin-order', status: 'queued', nextAttemptAt: new Date(0), attempts: 0 });
+  AdminPushEvent.updateOne = async () => ({ acknowledged: true });
+  User.find = () => query([{ _id: adminOne }, { _id: adminTwo }]);
+  AdminPushSubscription.find = (filter = {}) => query(allSubscriptions.filter((item) => {
+    if (filter.admin && String(item.admin) !== String(filter.admin)) return false;
+    if (filter.endpoint && item.endpoint !== filter.endpoint) return false;
+    return true;
+  }));
+  webPush.sendNotification = async (subscription) => {
+    sent.push(subscription.endpoint);
+    return true;
+  };
+
+  try {
+    await pushService.dispatchPendingAdminPushes();
+    const unique = [...new Set(sent)];
+    assert.equal(unique.length, 4);
+    assert.deepEqual(unique.sort(), [
+      'https://push.example.test/admin-one-laptop',
+      'https://push.example.test/admin-one-phone',
+      'https://push.example.test/admin-two-laptop',
+      'https://push.example.test/admin-two-phone',
+    ]);
+
+    const deviceOnly = await pushService.sendAdminPushToUser(adminOne, { title: 'test' }, 'https://push.example.test/admin-one-phone');
+    assert.equal(deviceOnly.sent, 1);
+    assert.equal(deviceOnly.failed, 0);
+  } finally {
+    webPush.sendNotification = originalSendNotification;
+    AdminPushEvent.find = originalEventFind;
+    AdminPushEvent.findOneAndUpdate = originalEventFindOneAndUpdate;
+    AdminPushEvent.updateOne = originalEventUpdateOne;
+    User.find = originalUserFind;
+    AdminPushSubscription.find = originalSubscriptionFind;
+  }
+});
+
 test('order push events are durable, generic, deduplicated, and isolated from admin-event failures', async () => {
   const notificationModule = await import('../models/AdminNotification.js');
   const AdminNotification = notificationModule.default;
