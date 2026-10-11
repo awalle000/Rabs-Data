@@ -88,10 +88,13 @@ export default function AdminPushSettings() {
     setError('');
     setMessage('');
     try {
-      await sendAdminPushTest();
-      setMessage('A test notification was sent to your subscribed devices.');
+      const registration = await navigator.serviceWorker.ready;
+      const current = await registration.pushManager.getSubscription();
+      if (!current) throw new Error('No active subscription is available for this device.');
+      await sendAdminPushTest(current.endpoint);
+      setMessage('A test notification was sent to this device only.');
     } catch (caught) {
-      setError(caught.response?.data?.message || 'The test notification could not be sent.');
+      setError(caught.response?.data?.message || caught.message || 'The test notification could not be sent.');
     } finally {
       setBusy(false);
     }
@@ -99,7 +102,7 @@ export default function AdminPushSettings() {
 
   const unsupported = !supportsPush();
   const denied = !unsupported && Notification.permission === 'denied';
-  const enabled = Boolean(subscription && config?.subscriptions?.length);
+  const enabled = Boolean(subscription);
   const status = unsupported ? 'Not supported' : denied ? 'Permission denied' : enabled ? 'Enabled' : 'Disabled';
 
   return (

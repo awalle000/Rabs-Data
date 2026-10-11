@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import webPush from 'web-push';
 import env from '../config/environment.js';
 import AdminPushEvent from '../models/AdminPushEvent.js';
@@ -7,6 +8,11 @@ import User from '../models/User.js';
 const MAX_ATTEMPTS = 8;
 const BASE_RETRY_MS = 30_000;
 let dispatcherRunning = false;
+
+const describeSubscription = (endpoint) => {
+  if (!endpoint) return 'unknown';
+  return crypto.createHash('sha256').update(endpoint).digest('base64url').slice(0, 12);
+};
 
 export const getPushConfiguration = () => ({
   publicKey: env.vapidPublicKey || null,
@@ -52,11 +58,27 @@ const sendToDevice = async (subscription, payload) => {
   }
 };
 
-export const sendAdminPushToUser = async (adminId, payload) => {
+export const sendAdminPushToUser = async (adminId, payload, endpoint = null) => {
   if (!configureWebPush()) return { sent: 0, unavailable: true };
-  const subscriptions = await AdminPushSubscription.find({ admin: adminId }).select('+endpoint +keys.p256dh +keys.auth').lean();
+
+  const query = { admin: adminId };
+  if (endpoint) query.endpoint = endpoint;
+
+  const subscriptions = await AdminPushSubscription.find(query).select('+endpoint +keys.p256dh +keys.auth').lean();
   const results = await Promise.allSettled(subscriptions.map((subscription) => sendToDevice(subscription, payload)));
-  return { sent: results.filter((result) => result.status === 'fulfilled' && result.value).length, failed: results.filter((result) => result.status === 'rejected').length };
+  const sent = results.filter((result) => result.status === 'fulfilled' && result.value).length;
+  const failed = results.filter((result) => result.status === 'rejected').length;
+
+  console.info('[admin-push] delivery', {
+    admin: String(adminId),
+    requestedTarget: endpoint ? 'device' : 'all',
+    recipients: subscriptions.length,
+    sent,
+    failed,
+    deviceHash: endpoint ? describeSubscription(endpoint) : null,
+  });
+
+  return { sent, failed };
 };
 
 export const queueOrderPush = async (order) => {
@@ -93,6 +115,14 @@ export const dispatchPendingAdminPushes = async () => {
       const payload = { title: event.title, body: event.body, url: event.url, tag: event.eventId, icon: '/pwa-192.png', badge: '/favicon-32.png' };
       const results = await Promise.allSettled(subscriptions.map((subscription) => sendToDevice(subscription, payload)));
       const failed = results.some((result) => result.status === 'rejected');
+
+      console.info('[admin-push] order-dispatch', {
+        eventId: event.eventId,
+        recipients: subscriptions.length,
+        sent: results.filter((result) => result.status === 'fulfilled' && result.value).length,
+        failed: results.filter((result) => result.status === 'rejected').length,
+      });
+
       if (!failed) {
         await AdminPushEvent.updateOne({ _id: event._id, status: 'queued' }, { $set: { status: 'sent' } });
       } else if (claimed.attempts >= MAX_ATTEMPTS) {

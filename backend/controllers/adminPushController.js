@@ -30,6 +30,11 @@ export const deleteAdminPushSubscription = asyncHandler(async (req, res) => {
 });
 
 export const sendAdminPushTest = asyncHandler(async (req, res) => {
+  const endpoint = typeof req.body?.endpoint === 'string' ? req.body.endpoint.trim() : '';
+  if (!endpoint) {
+    throw new AppError('A valid device subscription is required to send a test notification.', 400);
+  }
+
   const result = await sendAdminPushToUser(req.user._id, {
     title: 'RabsData Admin',
     body: 'Admin notifications are working on this device.',
@@ -37,8 +42,9 @@ export const sendAdminPushTest = asyncHandler(async (req, res) => {
     tag: `admin-test:${req.user._id}:${Date.now()}`,
     icon: '/pwa-192.png',
     badge: '/favicon-32.png',
-  });
+  }, endpoint);
+
   if (result.unavailable) throw new AppError('Admin push notifications are not configured.', 503);
-  if (!result.sent) throw new AppError('No active push subscription was found for this administrator.', 404);
+  if (!result.sent) throw new AppError('No active push subscription was found for this device.', 404);
   res.json({ success: true, sent: result.sent, failed: result.failed || 0 });
 });

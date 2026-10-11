@@ -84,7 +84,11 @@ test('admin push subscription APIs enforce admin auth, support multiple devices,
     subscriptions.set(subscription.endpoint, subscription);
     return subscription;
   };
-  AdminPushSubscription.find = (filter = {}) => query([...subscriptions.values()].filter((item) => !filter.admin || String(item.admin) === String(filter.admin)));
+  AdminPushSubscription.find = (filter = {}) => query([...subscriptions.values()].filter((item) => {
+    const matchesAdmin = !filter.admin || String(item.admin) === String(filter.admin);
+    const matchesEndpoint = !filter.endpoint || item.endpoint === filter.endpoint;
+    return matchesAdmin && matchesEndpoint;
+  }));
   AdminPushSubscription.deleteOne = async (filter) => ({ deletedCount: subscriptions.delete([...subscriptions.entries()].find(([, item]) => String(item._id) === String(filter._id))?.[0]) ? 1 : 0 });
   AdminPushEvent.create = async (event) => { events.set(event.eventId, event); return event; };
   webPush.sendNotification = async () => { sent += 1; };
@@ -105,10 +109,13 @@ test('admin push subscription APIs enforce admin auth, support multiple devices,
 
     const transfer = await request(base, '/push/subscriptions', tokenFor(otherAdminId, 'admin'), { method: 'POST', body: JSON.stringify(body) });
     assert.equal(transfer.status, 409);
-    const testResponse = await request(base, '/push/test', adminToken, { method: 'POST', body: '{}' });
+    const testResponse = await request(base, '/push/test', adminToken, {
+      method: 'POST',
+      body: JSON.stringify({ endpoint: 'https://push.example.test/device-one' }),
+    });
     assert.equal(testResponse.status, 200);
-    assert.equal((await testResponse.json()).sent, 2);
-    assert.equal(sent, 2);
+    assert.equal((await testResponse.json()).sent, 1);
+    assert.equal(sent, 1);
   } finally {
     User.findById = original.userFindById;
     AdminPushSubscription.findOne = original.subscriptionFindOne;

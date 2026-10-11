@@ -31,7 +31,7 @@ export const registerAdmin = (payload) => api.post('/admin/register-admin', payl
 export const getAdminPushStatus = () => get('/admin/push/status');
 export const registerAdminPushSubscription = (subscription) => api.post('/admin/push/subscriptions', subscription).then((res) => res.data);
 export const removeAdminPushSubscription = (endpoint) => api.delete('/admin/push/subscriptions', { data: { endpoint } }).then((res) => res.data);
-export const sendAdminPushTest = () => api.post('/admin/push/test').then((res) => res.data);
+export const sendAdminPushTest = (endpoint) => api.post('/admin/push/test', { endpoint }).then((res) => res.data);
 
 // ── Analytics / Profit Dashboard ──────────────────────────────────────
 export const getAnalyticsSummary = (params) => get('/admin/analytics/summary', params);
