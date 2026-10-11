@@ -196,6 +196,17 @@ test('status lookup reconciles with the original supplier reference without resu
   assert.equal(requests, 1);
 });
 
+test('status lookup does not invent a merchant reference omitted by the supplier response', async () => {
+  await withFetch(async () => jsonResponse({
+    success: true,
+    data: { orderId: 'supplier-order-1', status: 'completed' },
+  }), async () => {
+    const result = await padoda.getOrderStatus({ reference: 'DH-20261009-000001', providerReference: 'supplier-order-1' });
+    assert.equal(result.status, 'successful');
+    assert.equal(result.clientReference, null);
+  });
+});
+
 test('PadodaTagh order paths use the documented network codes', async () => {
   const paths = [];
   await withFetch(async (url, options) => {

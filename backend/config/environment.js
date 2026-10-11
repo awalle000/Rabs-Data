@@ -73,7 +73,6 @@ const env = Object.freeze({
   padodatagh: {
     baseUrl: trimSlash(process.env.PADODATAGH_BASE_URL || 'https://padodatagh.online/api/v1'),
     apiKey: process.env.PADODATAGH_API_KEY || '',
-    webhookToken: process.env.PADODATAGH_WEBHOOK_TOKEN || '',
     requestTimeoutMs: Number(process.env.PADODATAGH_REQUEST_TIMEOUT_MS) || 20000,
     syncIntervalMs: Number(process.env.PADODATAGH_SYNC_INTERVAL_MS) || 900000,
   },

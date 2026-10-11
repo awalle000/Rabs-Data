@@ -23,6 +23,6 @@ Do not put the secret key in frontend code, Vercel environment variables, browse
 
 ## PadodaTagh order callback
 
-The optional callback endpoint is `https://<API_PUBLIC_URL>/api/webhooks/padodatagh`. Set a strong, random `PADODATAGH_WEBHOOK_TOKEN` of at least 32 characters in the backend environment and configure PadodaTagh to send the same value in the `X-PadodaTagh-Webhook-Token` header. The endpoint rejects missing or invalid tokens before persisting events. If PadodaTagh cannot send a custom header, leave this callback unconfigured; scheduled status reconciliation remains available.
+The optional callback endpoint for the current Render service is `https://rabs-data.onrender.com/api/webhooks/padodatagh`. Configure this URL in PadodaTagh Developer Settings. The published callback contract documents a JSON POST on `completed` and `rejected` status changes, but does not document a test-button payload, callback signature, or custom authentication header. RabsData therefore treats callbacks only as triggers and verifies the order status with the authenticated PadodaTagh API before changing an order. Empty and synthetic callbacks without a matching submitted merchant reference are acknowledged as ignored and cannot update an order. Keep the PadodaTagh API key backend-only.
 
-Never reuse the PadodaTagh API key as the callback token.
+After deployment, a safe reachability check is `POST {}` to this URL. It should return HTTP 200 with `received: true` and `ignored: true`; it does not look up or change any order. A malformed non-empty JSON request should return HTTP 400 without a stack trace.

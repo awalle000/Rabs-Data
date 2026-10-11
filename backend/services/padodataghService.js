@@ -201,8 +201,8 @@ export const getOrderStatus = async ({ reference, providerReference }) => {
   return {
     status: normalizedStatus,
     supplierStatus: status || 'uncertain',
-    providerReference: order.orderId || order.order_id || providerReference || null,
-    clientReference: order.reference || reference || null,
+    providerReference: order.orderId || order.order_id || null,
+    clientReference: order.reference || null,
     refunded: false,
     message: `PadodaTagh order status: ${status || 'unknown'}`,
   };

@@ -1,4 +1,3 @@
-import env from '../config/environment.js';
 import AppError from '../utils/AppError.js';
 
 export const notFound = (req, res, next) => {
@@ -32,14 +31,14 @@ export const errorHandler = (err, req, res, next) => {
   const handled = normalizeError(err);
   const statusCode = handled.statusCode || 500;
 
-  if (statusCode >= 500) console.error(err);
+  if (statusCode >= 500) {
+    console.error(`[api-error] ${req.method} ${req.path} ${statusCode} ${handled.code || handled.name || 'INTERNAL_ERROR'}`);
+  }
 
   res.status(statusCode).json({
     success: false,
-    message:
-      statusCode >= 500 && env.isProduction ? 'Something went wrong' : handled.message,
+    message: statusCode >= 500 ? 'Something went wrong' : handled.message,
     ...(handled.code ? { code: handled.code } : {}),
     ...(handled.details ? { errors: handled.details } : {}),
-    ...(env.isProduction ? {} : { stack: err.stack }),
   });
 };
