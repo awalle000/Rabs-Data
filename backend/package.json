@@ -29,6 +29,7 @@
     "mongoose": "^9.10.3",
     "morgan": "^1.12.1",
     "nodemailer": "^10.0.15",
-    "openai": "^7.25.0"
+    "openai": "^7.25.0",
+    "web-push": "^3.6.7"
   }
 }

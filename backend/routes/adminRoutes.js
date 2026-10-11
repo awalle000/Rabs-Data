@@ -30,6 +30,13 @@ import {
 } from '../controllers/adminNotificationController.js';
 import { listAdminSmsNotifications } from '../controllers/adminSmsController.js';
 import {
+  deleteAdminPushSubscription,
+  getAdminPushStatus,
+  registerAdminPushSubscription,
+  sendAdminPushTest,
+} from '../controllers/adminPushController.js';
+import { adminPushLimiter } from '../middleware/rateLimitMiddleware.js';
+import {
   mongoIdParam,
   orderIdParam,
   packageCreateRules,
@@ -43,6 +50,11 @@ import {
 const router = express.Router();
 
 router.use(protect, adminOnly);
+
+router.get('/push/status', adminPushLimiter, getAdminPushStatus);
+router.post('/push/subscriptions', adminPushLimiter, registerAdminPushSubscription);
+router.delete('/push/subscriptions', adminPushLimiter, deleteAdminPushSubscription);
+router.post('/push/test', adminPushLimiter, sendAdminPushTest);
 
 router.get('/notifications/stream', streamAdminNotifications);
 router.get('/notifications', listAdminNotifications);

@@ -12,4 +12,12 @@ describe('service worker privacy policy', () => {
     expect(serviceWorkerSource).toContain("caches.match('/offline.html')");
     expect(serviceWorkerSource).toContain("rabsdata-static-v4");
   });
+
+  it('shows push notifications with the app identity and opens an admin route on click', () => {
+    expect(serviceWorkerSource).toContain("self.addEventListener('push'");
+    expect(serviceWorkerSource).toContain('self.registration.showNotification(title, options)');
+    expect(serviceWorkerSource).toContain("self.addEventListener('notificationclick'");
+    expect(serviceWorkerSource).toContain("'/admin/orders'");
+    expect(serviceWorkerSource).toContain('self.clients.openWindow(targetUrl)');
+  });
 });

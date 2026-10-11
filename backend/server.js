@@ -6,6 +6,7 @@ import { startSupplierReconciliation } from './jobs/reconcileSupplierOrders.js';
 import { startSupplierCatalogScheduler } from './services/supplierCatalogService.js';
 import { startLedgerAudit } from './jobs/auditLedger.js';
 import { startSmsDispatcher } from './services/smsNotificationService.js';
+import { startAdminPushDispatcher } from './services/adminPushService.js';
 
 const start = async () => {
   try {
@@ -26,6 +27,7 @@ const start = async () => {
   startSupplierCatalogScheduler();
   startLedgerAudit();
   startSmsDispatcher();
+  startAdminPushDispatcher();
 };
 
 process.on('unhandledRejection', (reason) => {

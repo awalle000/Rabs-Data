@@ -11,6 +11,7 @@ const [
   { default: SupplierControl },
   { default: Counter },
   { default: AdminNotification },
+  { default: AdminPushEvent },
   { createOrder },
   { fulfillOrder },
   dataProvider,
@@ -21,6 +22,7 @@ const [
   import('../models/SupplierControl.js'),
   import('../models/Counter.js'),
   import('../models/AdminNotification.js'),
+  import('../models/AdminPushEvent.js'),
   import('../controllers/orderController.js'),
   import('../services/orderFulfillmentService.js'),
   import('../services/dataProviderService.js'),
@@ -70,14 +72,17 @@ test('concurrent order retries persist one order and submit one supplier purchas
     controlFindOne: SupplierControl.findOne,
     counterFindOneAndUpdate: Counter.findOneAndUpdate,
     notificationCreate: AdminNotification.create,
+    pushEventCreate: AdminPushEvent.create,
   };
 
   const operations = new Map();
   const orders = new Map();
+  const adminEvents = new Set();
   let operationSequence = 0;
   let orderSequence = 0;
   let counterSequence = 0;
   let supplierPurchaseCount = 0;
+  let orderAdminEventCount = 0;
   let submittedSupplierReference = null;
   const customerId = '64d9e76af742f8ab3f1e29d1';
   const purchaseKey = 'checkout-operation-key-0001';
@@ -133,7 +138,15 @@ test('concurrent order retries persist one order and submit one supplier purchas
     SupplierControl.findOne = () => ({
       lean: async () => ({ key: 'default', suppliers: { padodatagh: { enabled: true } } }),
     });
-    AdminNotification.create = async (record) => record;
+    AdminNotification.create = async (record) => {
+      if (record.type === 'order_created') {
+        if (adminEvents.has(record.eventId)) throw duplicateKeyError();
+        adminEvents.add(record.eventId);
+        orderAdminEventCount += 1;
+      }
+      return record;
+    };
+    AdminPushEvent.create = async (record) => record;
 
     Order.create = async (record) => {
       if ([...orders.values()].some((order) => String(order.purchaseOperation) === String(record.purchaseOperation))) {
@@ -176,13 +189,22 @@ test('concurrent order retries persist one order and submit one supplier purchas
       (error) => error.code === 'IDEMPOTENCY_KEY_REQUIRED'
     );
 
+    DataPackage.findOne = async () => null;
+    await assert.rejects(
+      invokeCreateOrder({ key: 'failed-order-operation-0001', customerId }),
+      (error) => error.code === 'INVALID_PACKAGE'
+    );
+    assert.equal(orderAdminEventCount, 0);
+    DataPackage.findOne = async () => dataPackage;
+
     const responses = await Promise.all([
       invokeCreateOrder({ key: purchaseKey, customerId }),
       invokeCreateOrder({ key: purchaseKey, customerId }),
     ]);
 
     assert.equal(orders.size, 1);
-    assert.equal(operations.size, 1);
+    assert.equal(operations.size, 2);
+    assert.equal(orderAdminEventCount, 1);
     assert.deepEqual(responses.map((response) => response.statusCode).sort(), [201, 202]);
 
     const order = [...orders.values()][0];
@@ -200,6 +222,7 @@ test('concurrent order retries persist one order and submit one supplier purchas
     assert.equal(lostResponseRetry.body.duplicate, true);
     assert.equal(lostResponseRetry.body.trackingToken, order.trackingToken);
     assert.equal(orders.size, 1);
+    assert.equal(orderAdminEventCount, 1);
 
     await assert.rejects(
       invokeCreateOrder({ key: purchaseKey, customerId, recipientPhone: '0550000000' }),
@@ -219,9 +242,10 @@ test('concurrent order retries persist one order and submit one supplier purchas
     );
     const otherCustomerResponse = await invokeCreateOrder({ key: purchaseKey, customerId: '64d9e76af742f8ab3f1e29d3' });
     assert.equal(otherCustomerResponse.statusCode, 201);
-    assert.equal(operations.size, 2);
+    assert.equal(operations.size, 3);
     assert.equal(orders.size, 2);
     assert.equal(supplierPurchaseCount, 1);
+    assert.equal(orderAdminEventCount, 2);
   } finally {
     dataProvider.setMockPurchaser(null);
     PurchaseOperation.create = originalMethods.operationCreate;
@@ -236,6 +260,7 @@ test('concurrent order retries persist one order and submit one supplier purchas
     SupplierControl.findOne = originalMethods.controlFindOne;
     Counter.findOneAndUpdate = originalMethods.counterFindOneAndUpdate;
     AdminNotification.create = originalMethods.notificationCreate;
+    AdminPushEvent.create = originalMethods.pushEventCreate;
   }
 });
 

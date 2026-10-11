@@ -1,4 +1,5 @@
 import AdminNotification from '../models/AdminNotification.js';
+import { queueOrderPush } from './adminPushService.js';
 
 export const persistDeduplicatedNotification = async (Model, notification) => {
   try {
@@ -13,7 +14,11 @@ export const createAdminNotification = (notification) => persistDeduplicatedNoti
 
 export const notifyAdminsSafely = async (notification) => {
   try {
-    return await createAdminNotification(notification);
+    const persisted = await createAdminNotification(notification);
+    if (persisted && notification.type === 'order_created' && notification.relatedOrder) {
+      await queueOrderPush({ _id: notification.relatedOrder });
+    }
+    return persisted;
   } catch (error) {
     console.error('[admin-notification] persistence failed:', error.message);
     return null;

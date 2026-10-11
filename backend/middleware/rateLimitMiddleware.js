@@ -58,3 +58,9 @@ export const webhookLimiter = build({
   limit: 120,
   message: 'Too many webhook requests. Please try again later.',
 });
+
+export const adminPushLimiter = build({
+  windowMs: 60 * 1000,
+  limit: 12,
+  message: 'Too many notification requests. Please try again shortly.',
+});

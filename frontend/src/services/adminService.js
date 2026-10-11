@@ -28,6 +28,10 @@ export const syncSupplierBundles = (supplier = 'PadodaTagh') => api.post('/admin
 export const checkOrderSupplierStatus = (id) =>
   api.post(`/admin/orders/${id}/check-supplier-status`).then((res) => res.data);
 export const registerAdmin = (payload) => api.post('/admin/register-admin', payload).then((res) => res.data);
+export const getAdminPushStatus = () => get('/admin/push/status');
+export const registerAdminPushSubscription = (subscription) => api.post('/admin/push/subscriptions', subscription).then((res) => res.data);
+export const removeAdminPushSubscription = (endpoint) => api.delete('/admin/push/subscriptions', { data: { endpoint } }).then((res) => res.data);
+export const sendAdminPushTest = () => api.post('/admin/push/test').then((res) => res.data);
 
 // ── Analytics / Profit Dashboard ──────────────────────────────────────
 export const getAnalyticsSummary = (params) => get('/admin/analytics/summary', params);

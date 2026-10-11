@@ -9,6 +9,7 @@ import TransactionTable from '../../components/TransactionTable/TransactionTable
 import OrderStatus from '../../components/OrderStatus/OrderStatus.jsx';
 import Loader from '../../components/Loader/Loader.jsx';
 import Alert from '../../components/Alert/Alert.jsx';
+import AdminPushSettings from '../../components/AdminPushSettings/AdminPushSettings.jsx';
 import './AdminDashboard.css';
 
 const COLUMNS = [
@@ -32,6 +33,7 @@ export default function AdminDashboard() {
 
   return (
     <div className="dash">
+      <AdminPushSettings />
       {stats.ordersNeedingReview > 0 && (
         <Alert type="warning" title={`${stats.ordersNeedingReview} order(s) need manual review`}>
           Delivery status is unknown or a refund failed. <Link to="/admin/orders?review=1">Review them now</Link>
