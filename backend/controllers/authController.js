@@ -6,6 +6,7 @@ import { sendPasswordResetEmail } from '../services/emailService.js';
 import generateToken from '../utils/generateToken.js';
 import AppError from '../utils/AppError.js';
 import asyncHandler from '../utils/asyncHandler.js';
+import { consumePasswordResetToken } from '../utils/passwordResetTokens.js';
 
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 
@@ -21,20 +22,20 @@ export const register = asyncHandler(async (req, res) => {
   const user = await User.create({ name, email: normalizedEmail, phone, password });
   await getOrCreateWallet(user._id);
 
-  res.status(201).json({ success: true, token: generateToken(user._id), user });
+  res.status(201).json({ success: true, token: generateToken(user._id, user.tokenVersion), user });
 });
 
 export const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   const normalizedEmail = normalizeEmail(email);
 
-  const user = await User.findOne({ email: normalizedEmail }).select('+password');
+  const user = await User.findOne({ email: normalizedEmail }).select('+password +tokenVersion');
   if (!user || !(await user.comparePassword(password))) {
     throw new AppError('Invalid email or password', 401);
   }
   if (!user.isActive) throw new AppError('This account has been deactivated', 403);
 
-  res.json({ success: true, token: generateToken(user._id), user });
+  res.json({ success: true, token: generateToken(user._id, user.tokenVersion), user });
 });
 
 export const getMe = asyncHandler(async (req, res) => {
@@ -119,10 +120,7 @@ export const resetPassword = asyncHandler(async (req, res) => {
   // Hash incoming raw token with SHA-256 to compare with stored hash
   const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
 
-  const user = await User.findOne({
-    passwordResetTokenHash: hashedToken,
-    passwordResetExpiresAt: { $gt: new Date() },
-  }).select('+passwordResetTokenHash +passwordResetExpiresAt');
+  const user = await consumePasswordResetToken({ userModel: User, hashedToken });
 
   if (!user || !user.isActive) {
     // Safe security log
@@ -132,9 +130,7 @@ export const resetPassword = asyncHandler(async (req, res) => {
 
   // Update password and invalidate token immediately (single use)
   user.password = password;
-  user.passwordResetTokenHash = undefined;
-  user.passwordResetExpiresAt = undefined;
-  user.passwordChangedAt = new Date(Date.now() - 1000);
+  user.passwordChangedAt = new Date();
 
   await user.save();
 

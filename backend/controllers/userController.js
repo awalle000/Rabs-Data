@@ -17,7 +17,7 @@ export const updateProfile = asyncHandler(async (req, res) => {
 export const changePassword = asyncHandler(async (req, res) => {
   const { currentPassword, newPassword } = req.body;
 
-  const user = await User.findById(req.user._id).select('+password');
+  const user = await User.findById(req.user._id).select('+password +tokenVersion');
   if (!(await user.comparePassword(currentPassword))) {
     throw new AppError('Current password is incorrect', 400);
   }

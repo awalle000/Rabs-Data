@@ -7,6 +7,15 @@ import { BackendConnectionProvider } from './context/BackendConnectionContext.js
 import { OrderDraftProvider } from './context/OrderDraftContext.jsx';
 import './index.css';
 
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('/sw.js', { scope: '/', updateViaCache: 'none' })
+      .then((registration) => registration.update())
+      .catch((error) => console.warn('Service worker registration failed:', error));
+  });
+}
+
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <BrowserRouter>

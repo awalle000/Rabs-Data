@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 const purchaseOperationSchema = new mongoose.Schema(
   {
-    key: { type: String, required: true, unique: true, index: true },
+    key: { type: String, required: true },
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
     kind: {
       type: String,
@@ -27,6 +27,6 @@ const purchaseOperationSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-purchaseOperationSchema.index({ customer: 1, key: 1 }, { unique: true });
+purchaseOperationSchema.index({ key: 1 }, { unique: true });
 
 export default mongoose.model('PurchaseOperation', purchaseOperationSchema);

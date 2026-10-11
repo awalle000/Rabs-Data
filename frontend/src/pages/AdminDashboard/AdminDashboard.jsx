@@ -40,9 +40,9 @@ export default function AdminDashboard() {
 
       <div className="dash__stats">
         <StatsCard
-          label="RemaData Wallet"
+          label="PadodaTagh Wallet"
           value={stats.supplierBalance != null ? formatCurrency(stats.supplierBalance) : (stats.supplierConfigured ? 'Connected' : 'Not configured')}
-          hint={stats.supplierConfigured ? 'Supplier: RemaData' : 'Set REMADATA_API_KEY'}
+          hint={stats.supplierConfigured ? 'Exclusive supplier' : 'Configure PADODATAGH_API_KEY on the backend'}
           icon="wallet"
           tone={stats.supplierConfigured ? 'success' : 'warning'}
         />

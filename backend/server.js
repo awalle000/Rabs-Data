@@ -3,7 +3,8 @@ import connectDB from './config/db.js';
 import app from './app.js';
 import { startPaymentReconciliation } from './jobs/reconcilePayments.js';
 import { startSupplierReconciliation } from './jobs/reconcileSupplierOrders.js';
-import { startCatalogSyncScheduler } from './services/remadataSyncService.js';
+import { startSupplierCatalogScheduler } from './services/supplierCatalogService.js';
+import { startLedgerAudit } from './jobs/auditLedger.js';
 
 const start = async () => {
   try {
@@ -21,7 +22,8 @@ const start = async () => {
 
   startPaymentReconciliation();
   startSupplierReconciliation();
-  startCatalogSyncScheduler();
+  startSupplierCatalogScheduler();
+  startLedgerAudit();
 };
 
 process.on('unhandledRejection', (reason) => {

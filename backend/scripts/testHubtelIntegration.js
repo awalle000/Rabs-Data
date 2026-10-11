@@ -10,10 +10,10 @@
  * 6. Duplicate callback/webhook
  * 7. Wrong payment amount
  * 8. Duplicate order submission
- * 9. Payment success followed by RemaData purchase
- * 10. RemaData pending
- * 11. RemaData failure
- * 12. RemaData refund
+ * 9. Payment success followed by PadodaTagh purchase
+ * 10. PadodaTagh pending
+ * 11. PadodaTagh failure
+ * 12. PadodaTagh refund
  */
 
 import mongoose from 'mongoose';
@@ -80,7 +80,7 @@ async function runTests() {
       paymentGatewayFee: pricing.paymentGatewayFee,
       providerCost: 5.5,
       profit: 4.5,
-      supplier: 'RemaData',
+      supplier: 'PadodaTagh',
       supplierCost: 5.5,
       supplierClientReference: testOrderId1,
       supplierStatus: 'not_started',
@@ -110,8 +110,9 @@ async function runTests() {
     // TEST 2: Successful Payment Verification
     // -------------------------------------------------------------------------
     console.log('\n--- TEST 2: Successful Payment Verification ---');
-    paymentService.setMockVerifier(async () => ({
+    paymentService.setMockVerifier(async (reference) => ({
       status: 'successful',
+      reference,
       amount: 10.0,
       charges: 0.2,
       amountAfterCharges: 9.8,
@@ -157,6 +158,8 @@ async function runTests() {
       order: order3._id,
       purpose: 'order',
       amount: 10.0,
+      currency: 'GHS',
+      provider: 'hubtel',
       status: 'pending',
     });
 
@@ -203,6 +206,8 @@ async function runTests() {
       order: order4._id,
       purpose: 'order',
       amount: 10.0,
+      currency: 'GHS',
+      provider: 'hubtel',
       status: 'pending',
     });
 
@@ -244,6 +249,8 @@ async function runTests() {
       order: order5._id,
       purpose: 'order',
       amount: 10.0,
+      currency: 'GHS',
+      provider: 'hubtel',
       status: 'pending',
     });
 
@@ -260,8 +267,9 @@ async function runTests() {
     // TEST 6: Duplicate Callback / Webhook Idempotency
     // -------------------------------------------------------------------------
     console.log('\n--- TEST 6: Duplicate Callback / Webhook Idempotency ---');
-    paymentService.setMockVerifier(async () => ({
+    paymentService.setMockVerifier(async (reference) => ({
       status: 'successful',
+      reference,
       amount: 10.0,
       charges: 0.2,
       currency: 'GHS',
@@ -303,12 +311,15 @@ async function runTests() {
       order: order7._id,
       purpose: 'order',
       amount: 100.0,
+      currency: 'GHS',
+      provider: 'hubtel',
       status: 'pending',
     });
 
     // Provider reports customer paid only 1.00 instead of 100.00
-    paymentService.setMockVerifier(async () => ({
+    paymentService.setMockVerifier(async (reference) => ({
       status: 'successful',
+      reference,
       amount: 1.0,
       currency: 'GHS',
       providerReference: 'UNDERPAID-TXN',
@@ -355,9 +366,9 @@ async function runTests() {
     assert(dupeFound !== null, 'Duplicate order in active window correctly detected');
 
     // -------------------------------------------------------------------------
-    // TEST 9: Payment Success Followed by RemaData Purchase
+    // TEST 9: Payment Success Followed by PadodaTagh Purchase
     // -------------------------------------------------------------------------
-    console.log('\n--- TEST 9: Payment Success Followed by RemaData Purchase ---');
+    console.log('\n--- TEST 9: Payment Success Followed by PadodaTagh Purchase ---');
     const testOrderId9 = await generateOrderId();
     const order9 = await Order.create({
       orderId: testOrderId9,
@@ -372,7 +383,7 @@ async function runTests() {
       sellingPrice: 10.0,
       providerCost: 5.5,
       profit: 4.5,
-      supplier: 'RemaData',
+      supplier: 'PadodaTagh',
       supplierCost: 5.5,
       supplierStatus: 'not_started',
       status: 'pending',
@@ -384,24 +395,24 @@ async function runTests() {
     dataProvider.setMockPurchaser(async ({ reference }) => ({
       status: 'successful',
       supplierStatus: 'completed',
-      providerReference: 'REMADATA-REF-09',
+      providerReference: 'PADODATAGH-REF-09',
       clientReference: reference,
       supplierCost: 5.5,
     }));
 
     const fulfilled = await fulfillOrder(paidOrder9._id);
-    assert(fulfilled.status === 'successful', 'Order successfully fulfilled via RemaData');
+    assert(fulfilled.status === 'successful', 'Order successfully fulfilled via PadodaTagh');
     assert(fulfilled.supplierStatus === 'completed', 'Supplier status marked completed');
-    assert(fulfilled.supplierReference === 'REMADATA-REF-09', 'RemaData reference stored');
+    assert(fulfilled.supplierReference === 'PADODATAGH-REF-09', 'PadodaTagh reference stored');
 
     // Double fulfillment test
     const repeatFulfill = await fulfillOrder(paidOrder9._id);
-    assert(repeatFulfill.supplierReference === 'REMADATA-REF-09', 'Repeat fulfillment did not double-order');
+    assert(repeatFulfill.supplierReference === 'PADODATAGH-REF-09', 'Repeat fulfillment did not double-order');
 
     // -------------------------------------------------------------------------
-    // TEST 10: RemaData Pending Fulfillment
+    // TEST 10: PadodaTagh Pending Fulfillment
     // -------------------------------------------------------------------------
-    console.log('\n--- TEST 10: RemaData Pending Fulfillment ---');
+    console.log('\n--- TEST 10: PadodaTagh Pending Fulfillment ---');
     const testOrderId10 = await generateOrderId();
     const order10 = await Order.create({
       orderId: testOrderId10,
@@ -423,7 +434,7 @@ async function runTests() {
     dataProvider.setMockPurchaser(async ({ reference }) => ({
       status: 'processing',
       supplierStatus: 'pending',
-      providerReference: 'REMADATA-PENDING-10',
+      providerReference: 'PADODATAGH-PENDING-10',
       clientReference: reference,
       supplierCost: 5.5,
     }));
@@ -433,9 +444,9 @@ async function runTests() {
     assert(pendingFulfillment.supplierStatus === 'pending', 'Supplier status is pending');
 
     // -------------------------------------------------------------------------
-    // TEST 11: RemaData Failure Handling
+    // TEST 11: PadodaTagh Failure Handling
     // -------------------------------------------------------------------------
-    console.log('\n--- TEST 11: RemaData Failure Handling ---');
+    console.log('\n--- TEST 11: PadodaTagh Failure Handling ---');
     const failedResult = await applyProviderResult(pendingFulfillment, {
       status: 'failed',
       supplierStatus: 'failed',
@@ -445,9 +456,9 @@ async function runTests() {
     assert(failedResult.refundRequired === true, 'Refund required flag set for customer');
 
     // -------------------------------------------------------------------------
-    // TEST 12: RemaData Refund Handling
+    // TEST 12: PadodaTagh Refund Handling
     // -------------------------------------------------------------------------
-    console.log('\n--- TEST 12: RemaData Refund Handling ---');
+    console.log('\n--- TEST 12: PadodaTagh Refund Handling ---');
     const testOrderId12 = await generateOrderId();
     const order12 = await Order.create({
       orderId: testOrderId12,

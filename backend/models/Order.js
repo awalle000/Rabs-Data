@@ -15,7 +15,7 @@ export const ORDER_STATUSES = [
 const orderSchema = new mongoose.Schema(
   {
     orderId: { type: String, required: true, unique: true },
-    purchaseOperation: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseOperation', default: null, index: true },
+    purchaseOperation: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseOperation', default: null },
     // Optional: guests buy without an account.
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
     contactPhone: { type: String, index: true },
@@ -35,12 +35,17 @@ const orderSchema = new mongoose.Schema(
     baseProductPrice: { type: Number, min: 0 },
     customerChargedAmount: { type: Number, min: 0 },
     paymentGatewayFee: { type: Number, default: 0, min: 0 },
+    paymentGatewayFeeKnown: { type: Boolean },
     providerCost: { type: Number, required: true, min: 0 },
     profit: { type: Number, required: true },
     grossProfit: { type: Number },
     netProfit: { type: Number },
-    // Supplier (RemaData) tracking fields
-    supplier: { type: String, default: 'RemaData' },
+    // Supplier and live offer snapshots are fixed when the customer order is created.
+    supplier: { type: String, enum: ['PadodaTagh', 'RemaData'] },
+    supplierOfferSnapshot: {
+      padodatagh: { packageCode: { type: String, default: '' }, supplierCost: { type: Number, min: 0, default: null }, network: { type: String, default: '' }, volumeInMB: { type: Number, min: 1, default: null }, validity: { type: String, default: '' }, bundleType: { type: String, default: '' }, restrictions: { type: [String], default: null } },
+      remadata: { packageCode: { type: String, default: '' }, supplierCost: { type: Number, min: 0, default: null }, network: { type: String, default: '' }, volumeInMB: { type: Number, min: 1, default: null }, validity: { type: String, default: '' }, bundleType: { type: String, default: '' }, restrictions: { type: [String], default: null } },
+    },
     supplierCost: { type: Number, min: 0 },
     supplierReference: { type: String, index: true },
     supplierClientReference: { type: String, index: true },
@@ -55,7 +60,9 @@ const orderSchema = new mongoose.Schema(
     supplierCompletedAt: { type: Date },
     supplierRefunded: { type: Boolean, default: false },
     paymentMethod: { type: String, enum: ['direct', 'wallet'], default: 'direct' },
+    feePassedToCustomer: { type: Boolean },
     paymentReference: { type: String, index: true },
+    paymentProvider: { type: String, enum: ['hubtel', 'paystack'] },
     hubtelReference: { type: String, index: true },
     hubtelTransactionId: { type: String, index: true },
     paymentStatus: {
@@ -76,6 +83,10 @@ const orderSchema = new mongoose.Schema(
 );
 
 orderSchema.index({ customer: 1, createdAt: -1 });
+orderSchema.index(
+  { purchaseOperation: 1 },
+  { unique: true, partialFilterExpression: { purchaseOperation: { $type: 'objectId' } } }
+);
 
 // Ensure supplierCost mirrors providerCost, supplierReference mirrors providerReference,
 // and financial fee accounting fields are populated.
@@ -120,7 +131,7 @@ orderSchema.pre('save', function () {
   } else if (this.providerReference && !this.supplierReference) {
     this.supplierReference = this.providerReference;
   }
-  if (this.paymentReference && !this.hubtelReference) {
+  if (this.paymentProvider !== 'paystack' && this.paymentReference && !this.hubtelReference) {
     this.hubtelReference = this.paymentReference;
   } else if (this.hubtelReference && !this.paymentReference) {
     this.paymentReference = this.hubtelReference;
@@ -145,6 +156,7 @@ orderSchema.methods.toCustomerJSON = function () {
   delete order.grossProfit;
   delete order.netProfit;
   delete order.providerPackageCode;
+  delete order.supplierOfferSnapshot;
   delete order.providerReference;
   delete order.refundRequired;
   delete order.needsReview;

@@ -6,7 +6,7 @@
  * Prerequisites:
  *   1. Backend running on http://localhost:5000
  *   2. Two test customer accounts (created fresh each run)
- *   3. One admin account (set ADMIN_EMAIL / ADMIN_PASSWORD env vars or use defaults)
+ *   3. One admin account (set ADMIN_EMAIL / ADMIN_PASSWORD env vars)
  *
  * Usage:
  *   node scripts/securityTests.js
@@ -17,8 +17,13 @@
 import 'dotenv/config';
 
 const BASE = process.env.API_URL || 'http://localhost:5000/api';
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@maridata.com';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'AdminPassword123!';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+
+if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
+  console.error('Set ADMIN_EMAIL and ADMIN_PASSWORD for the security test account.');
+  process.exit(1);
+}
 
 // ─────────────────────────── helpers ────────────────────────────
 
@@ -314,7 +319,7 @@ async function run() {
     assert('Admin GET /admin/orders returns 200', r.status === 200, `got ${r.status}`);
     // Supplier API key must never appear in the response body
     const body = JSON.stringify(r.data || {});
-    const hasApiKey = body.includes('REMADATA') || body.includes('apiKey') || body.includes('api_key');
+    const hasApiKey = body.includes('PADODATAGH') || body.includes('apiKey') || body.includes('api_key');
     assert('Admin orders response does not expose supplier API key', !hasApiKey,
       hasApiKey ? 'apiKey-like string found in response' : '');
   }

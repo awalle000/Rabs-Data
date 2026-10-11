@@ -10,6 +10,7 @@ import { saveGuestOrder } from '../../utils/guestOrders.js';
 import { formatCurrency } from '../../utils/formatCurrency.js';
 import { isValidEmail } from '../../utils/validators.js';
 import { getErrorCode, getErrorMessage } from '../../utils/errors.js';
+import { clearCheckoutIdempotencyKey, getCheckoutIdempotencyKey } from '../../utils/checkoutIdempotency.js';
 import OrderSummary from '../../components/OrderSummary/OrderSummary.jsx';
 import Alert from '../../components/Alert/Alert.jsx';
 import './Checkout.css';
@@ -41,7 +42,7 @@ export default function Checkout() {
   const walletAvailable = Boolean(user && walletInfo && walletInfo.fundingEnabled !== false);
   const walletShort = walletAvailable && walletInfo.balance < (pkg?.sellingPrice || 0);
 
-  // Payment configuration (Hubtel fee pass-through and settings)
+  // Payment availability is determined by the backend.
   const paymentConfig = useAsync(
     () => (connection.isConnected ? paymentService.getPaymentConfig() : Promise.resolve(null)),
     [connection.isConnected],
@@ -52,14 +53,9 @@ export default function Checkout() {
     paymentConfig.data?.isConfigured && (deliveryConfigured || paymentConfig.data?.allowPaymentsWithoutDelivery)
   );
   const canPayWallet = Boolean(deliveryConfigured && walletAvailable);
-  const feePassedToCustomer = Boolean(paymentConfig.data?.feePassedToCustomer);
-  const feePercentage = Number(paymentConfig.data?.feePercentage) || 1.95;
-
   const basePrice = pkg?.sellingPrice || 0;
-  const estimatedFee = feePassedToCustomer && method === 'direct'
-    ? Math.round(((basePrice * feePercentage) / 100) * 100) / 100
-    : 0;
-  const finalPayable = Math.round((basePrice + estimatedFee) * 100) / 100;
+  const estimatedFee = 0;
+  const finalPayable = basePrice;
 
   if (!pkg || !draft.recipientPhone) return null;
 
@@ -77,8 +73,12 @@ export default function Checkout() {
       });
       return;
     }
+    if (method === 'direct' && !email) {
+      setError({ message: 'Enter an email address to continue to payment.' });
+      return;
+    }
     if (email && !isValidEmail(email)) {
-      setError({ message: 'Enter a valid email address, or leave it blank.' });
+      setError({ message: 'Enter a valid email address.' });
       return;
     }
 
@@ -87,7 +87,14 @@ export default function Checkout() {
       // Step 1: create the order once. A retry only repeats the payment step.
       let current = created;
       if (!current) {
-        const idempotencyKey = created?.idempotencyKey || (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+        const idempotencyKey = getCheckoutIdempotencyKey({
+          packageId: pkg._id,
+          network: pkg.network,
+          recipientPhone: draft.recipientPhone,
+          paymentMethod: method,
+          contactEmail: email,
+          userId: user?._id,
+        });
         const response = await orderService.createOrder({
           packageId: pkg._id,
           recipientPhone: draft.recipientPhone,
@@ -112,6 +119,7 @@ export default function Checkout() {
 
       // Wallet orders are already paid by the time createOrder returns.
       if (method === 'wallet') {
+        clearCheckoutIdempotencyKey();
         clearDraft();
         navigate(successUrl);
         return;
@@ -123,6 +131,7 @@ export default function Checkout() {
         trackingToken: current.token || undefined,
       });
 
+      clearCheckoutIdempotencyKey();
       clearDraft();
       if (payment.payment?.authorizationUrl) {
         window.location.assign(payment.payment.authorizationUrl);
@@ -207,7 +216,7 @@ export default function Checkout() {
           {method === 'direct' && (
             <div className="field">
               <label className="field__label" htmlFor="email">
-                Email for your receipt (optional)
+                Email for payment and receipt
               </label>
               <input
                 id="email"

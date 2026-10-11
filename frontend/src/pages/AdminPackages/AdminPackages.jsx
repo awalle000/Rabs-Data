@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import useAsync from '../../hooks/useAsync.js';
-import { createPackage, deletePackage, getPackages, updatePackage } from '../../services/adminService.js';
+import { createPackage, deletePackage, getPackages, updatePackage, updatePackageActivation } from '../../services/adminService.js';
 import { NETWORKS, profitOf } from '../../utils/adminFormat.js';
 import { formatCurrency } from '../../utils/formatCurrency.js';
 import { getErrorMessage } from '../../utils/errors.js';
@@ -54,7 +54,7 @@ function PackageFormModal({ pkg, onClose, onSaved }) {
       providerCost: cost,
       sellingPrice: price,
       providerPackageCode: form.providerPackageCode.trim(),
-      isActive: form.isActive,
+      ...(!pkg ? { isActive: form.isActive } : {}),
     };
 
     setSaving(true);
@@ -142,10 +142,12 @@ function PackageFormModal({ pkg, onClose, onSaved }) {
         {textField('providerPackageCode', 'Provider package code (optional)', { maxLength: 100 })}
         <p className="field__hint pkg-form__hint">The code your data provider uses for this bundle. Fill it in once the provider is connected.</p>
 
-        <label className="pkg-form__active">
-          <input type="checkbox" checked={form.isActive} onChange={(event) => setForm((current) => ({ ...current, isActive: event.target.checked }))} />
-          Active (visible to customers)
-        </label>
+        {!pkg && (
+          <label className="pkg-form__active">
+            <input type="checkbox" checked={form.isActive} onChange={(event) => setForm((current) => ({ ...current, isActive: event.target.checked }))} />
+            Active (visible to customers)
+          </label>
+        )}
       </form>
     </Modal>
   );
@@ -175,8 +177,9 @@ export default function AdminPackages() {
     setBusyId(pkg._id);
     setNotice(null);
     try {
-      await updatePackage(pkg._id, { isActive: !pkg.isActive });
-      reload();
+      const result = await updatePackageActivation(pkg._id, !pkg.isActive);
+      await reload();
+      setNotice({ type: 'success', text: `${pkg.network} ${pkg.name} ${result.package.isActive ? 'activated' : 'deactivated'}.` });
     } catch (err) {
       setNotice({ type: 'error', text: getErrorMessage(err) });
     }

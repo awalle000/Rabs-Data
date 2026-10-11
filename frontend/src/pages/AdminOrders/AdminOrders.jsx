@@ -39,7 +39,7 @@ const COLUMNS = [
       return <span className={`status-badge status-badge--${tone}`}>{humanize(ps)}</span>;
     },
   },
-  { key: 'hubtelReference', label: 'Hubtel Ref', render: (order) => <code>{order.hubtelReference || order.paymentReference || '-'}</code> },
+  { key: 'paymentReference', label: 'Payment Ref', render: (order) => <code>{order.paymentReference || order.hubtelReference || '-'}</code> },
   {
     key: 'supplierStatus',
     label: 'Supplier Status',
@@ -49,7 +49,7 @@ const COLUMNS = [
       return <span className={`status-badge status-badge--${tone}`}>{humanize(ss)}</span>;
     },
   },
-  { key: 'supplierReference', label: 'RemaData Ref', render: (order) => <code>{order.supplierReference || order.providerReference || '-'}</code> },
+  { key: 'supplierReference', label: 'Supplier Ref', render: (order) => <code>{order.supplierReference || order.providerReference || '-'}</code> },
   { key: 'supplierCost', label: 'Supplier Cost', align: 'right', render: (order) => formatCurrency(order.supplierCost || order.providerCost || 0) },
   { key: 'profit', label: 'Profit', align: 'right', render: (order) => <strong className="profit-green">{formatCurrency(order.netProfit ?? order.grossProfit ?? order.profit)}</strong> },
   { key: 'createdAt', label: 'Created At', render: (order) => formatDate(order.createdAt) },
@@ -75,14 +75,14 @@ function OrderDetail({ id, onUpdated }) {
       const res = await checkOrderSupplierStatus(order._id);
       setSupplierNotice({
         type: 'success',
-        text: `Checked RemaData: status is ${res.supplierCheck?.supplierStatus || res.order?.status}`,
+        text: `Checked supplier: status is ${res.supplierCheck?.supplierStatus || res.order?.status}`,
       });
       reload();
       if (onUpdated) onUpdated();
     } catch (err) {
       setSupplierNotice({
         type: 'danger',
-        text: err?.response?.data?.message || err.message || 'Failed to check status with RemaData',
+        text: err?.response?.data?.message || err.message || 'Failed to check supplier status',
       });
     } finally {
       setCheckingSupplier(false);
@@ -99,14 +99,15 @@ function OrderDetail({ id, onUpdated }) {
     ['Bundle', `${order.dataAmount} (${order.packageName}), ${order.validity}`],
     ['Selling Price (Base)', formatCurrency(order.baseProductPrice || order.sellingPrice)],
     ['Customer Charged Amount', formatCurrency(order.customerChargedAmount || order.sellingPrice)],
-    ['Payment Gateway Fee', formatCurrency(order.paymentGatewayFee || 0)],
-    ['Supplier Cost (RemaData)', formatCurrency(order.supplierCost || order.providerCost || 0)],
+    ['Payment Gateway Fee', order.paymentGatewayFeeKnown === false && order.paymentProvider === 'paystack' ? 'Not reported' : formatCurrency(order.paymentGatewayFee || 0)],
+    ['Supplier Cost', formatCurrency(order.supplierCost || order.providerCost || 0)],
     ['Gross Profit', formatCurrency(order.grossProfit ?? order.profit)],
     ['Net Profit', formatCurrency(order.netProfit ?? order.profit)],
-    ['Hubtel Reference', order.hubtelReference || order.paymentReference || '-'],
-    ['Hubtel Transaction ID', order.hubtelTransactionId || '-'],
-    ['Supplier', order.supplier || 'RemaData'],
-    ['RemaData Reference', order.supplierReference || order.providerReference || '-'],
+    [order.paymentProvider === 'hubtel' || (!order.paymentProvider && order.hubtelReference) ? 'Hubtel Reference' : 'Payment Reference', order.paymentReference || order.hubtelReference || '-'],
+    ...(order.hubtelTransactionId ? [['Hubtel Transaction ID', order.hubtelTransactionId]] : []),
+    ['Payment Provider', order.paymentProvider || (order.hubtelReference ? 'Hubtel (historical)' : 'Unknown')],
+    ['Supplier', order.supplier || 'PadodaTagh'],
+    ['Supplier Reference', order.supplierReference || order.providerReference || '-'],
     ['Supplier Status', humanize(order.supplierStatus || 'not_started')],
     ['Payment Method', humanize(order.paymentMethod)],
     ['Created At', formatDate(order.createdAt)],
@@ -136,7 +137,7 @@ function OrderDetail({ id, onUpdated }) {
           disabled={checkingSupplier}
           onClick={handleCheckSupplier}
         >
-          {checkingSupplier ? 'Checking RemaData...' : 'Check Supplier Status (RemaData)'}
+          {checkingSupplier ? 'Checking supplier...' : 'Check Supplier Status'}
         </button>
       </div>
 
@@ -222,7 +223,7 @@ export default function AdminOrders() {
   const [reviewOnly, setReviewOnly] = useState(searchParams.get('review') === '1');
   const [searchInput, setSearchInput] = useState(initialSearch);
   const [search, setSearch] = useState(initialSearch);
-  const [selectedId, setSelectedId] = useState(null);
+  const [selectedId, setSelectedId] = useState(searchParams.get('open'));
 
   const { data, loading, error, reload } = useAsync(
     () =>

@@ -9,6 +9,7 @@ const userSchema = new mongoose.Schema(
     password: { type: String, required: true, minlength: 8, select: false },
     role: { type: String, enum: ['customer', 'admin'], default: 'customer' },
     isActive: { type: Boolean, default: true },
+    tokenVersion: { type: Number, default: 0, select: false },
     passwordResetTokenHash: { type: String, select: false, index: true },
     passwordResetExpiresAt: { type: Date, select: false },
     passwordChangedAt: { type: Date },
@@ -20,6 +21,7 @@ const userSchema = new mongoose.Schema(
         delete ret.password;
         delete ret.passwordResetTokenHash;
         delete ret.passwordResetExpiresAt;
+        delete ret.tokenVersion;
         delete ret.__v;
         return ret;
       },
@@ -31,7 +33,8 @@ userSchema.pre('save', async function () {
   if (!this.isModified('password')) return;
   this.password = await bcrypt.hash(this.password, 12);
   if (!this.isNew) {
-    this.passwordChangedAt = new Date(Date.now() - 1000);
+    this.passwordChangedAt = new Date();
+    this.tokenVersion = (this.tokenVersion || 0) + 1;
   }
 });
 

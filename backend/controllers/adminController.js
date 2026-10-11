@@ -1,19 +1,21 @@
 import User from '../models/User.js';
 import DataPackage from '../models/DataPackage.js';
+import PackageActivationAudit from '../models/PackageActivationAudit.js';
 import Order, { ORDER_STATUSES } from '../models/Order.js';
 import Payment from '../models/Payment.js';
 import Transaction, { TRANSACTION_TYPES } from '../models/Transaction.js';
 import { NETWORK_CODES } from '../config/networks.js';
 import { creditWallet } from '../services/walletService.js';
 import * as dataProvider from '../services/dataProviderService.js';
-import * as remadata from '../services/remadataService.js';
-import { getCatalogSyncStatus, syncSupplierCatalog } from '../services/remadataSyncService.js';
 import { applyProviderResult } from '../services/orderFulfillmentService.js';
 import AppError from '../utils/AppError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { roundMoney } from '../utils/money.js';
 import { getPagination, buildMeta } from '../utils/pagination.js';
 import { getOrCreateWallet } from '../services/walletService.js';
+import { getPublicSupplierStatus, getSupplierControl, updateSupplierControl, recordSupplierHealth } from '../services/supplierControlService.js';
+import { getSupplierCatalogStatus, syncSupplierOffers } from '../services/supplierCatalogService.js';
+import { isExplicitPadodaTaghOrder } from '../utils/supplierPolicies.js';
 
 const OBJECT_ID = /^[a-f\d]{24}$/i;
 const PACKAGE_FIELDS = [
@@ -21,6 +23,8 @@ const PACKAGE_FIELDS = [
   'name',
   'dataAmount',
   'validity',
+  'bundleType',
+  'restrictions',
   'providerCost',
   'sellingPrice',
   'volumeInMB',
@@ -56,14 +60,14 @@ export const getDashboard = asyncHandler(async (req, res) => {
   const count = (status) => byStatus[status]?.count || 0;
 
   // Supplier wallet and status
-  const supplierConfigured = dataProvider.isDataProviderConfigured();
+  const supplierConfigured = dataProvider.isDataProviderConfigured('PadodaTagh');
   let supplierBalance = null;
   let supplierCurrency = 'GHS';
   let supplierError = null;
 
   if (supplierConfigured) {
     try {
-      const balanceData = await dataProvider.getProviderBalance();
+      const balanceData = await dataProvider.getProviderBalance('PadodaTagh');
       supplierBalance = roundMoney(balanceData.balance);
       supplierCurrency = balanceData.currency || 'GHS';
     } catch (err) {
@@ -85,13 +89,13 @@ export const getDashboard = asyncHandler(async (req, res) => {
       activePackages,
       ordersNeedingReview: needsReview,
       supplierConfigured,
-      supplierName: 'RemaData',
+      supplierName: 'PadodaTagh',
       supplierBalance,
       supplierCurrency,
       supplierError,
     },
     supplier: {
-      name: 'RemaData',
+      name: 'PadodaTagh',
       configured: supplierConfigured,
       balance: supplierBalance,
       currency: supplierCurrency,
@@ -279,11 +283,36 @@ export const createPackage = asyncHandler(async (req, res) => {
 export const updatePackage = asyncHandler(async (req, res) => {
   const dataPackage = await DataPackage.findById(req.params.id);
   if (!dataPackage) throw new AppError('Package not found', 404);
+  if (Object.hasOwn(req.body, 'isActive')) {
+    throw new AppError('Use the package activation action to change visibility.', 400, 'ACTIVATION_REQUIRES_EXPLICIT_ACTION');
+  }
 
-  Object.assign(dataPackage, pick(req.body, PACKAGE_FIELDS));
+  const updates = pick(req.body, PACKAGE_FIELDS);
+  Object.assign(dataPackage, updates);
   assertPricing(dataPackage.providerCost, dataPackage.sellingPrice);
 
   await dataPackage.save();
+  res.json({ success: true, package: dataPackage });
+});
+
+export const updatePackageActivation = asyncHandler(async (req, res) => {
+  const dataPackage = await DataPackage.findById(req.params.id);
+  if (!dataPackage) throw new AppError('Package not found', 404);
+
+  const previousActive = dataPackage.isActive;
+  const newActive = req.body.isActive;
+  if (previousActive !== newActive) {
+    dataPackage.isActive = newActive;
+    await dataPackage.save();
+    await PackageActivationAudit.create({
+      packageId: dataPackage._id,
+      actor: req.user?._id || null,
+      previousActive,
+      newActive,
+      sourceOperation: 'admin_package_activation',
+      changedAt: new Date(),
+    });
+  }
   res.json({ success: true, package: dataPackage });
 });
 
@@ -294,8 +323,19 @@ export const deletePackage = asyncHandler(async (req, res) => {
   // Packages with order history are deactivated, not deleted, so records stay intact.
   const hasOrders = await Order.exists({ dataPackage: dataPackage._id });
   if (hasOrders) {
+    const wasActive = dataPackage.isActive;
     dataPackage.isActive = false;
     await dataPackage.save();
+    if (wasActive) {
+      await PackageActivationAudit.create({
+        packageId: dataPackage._id,
+        actor: req.user?._id || null,
+        previousActive: true,
+        newActive: false,
+        sourceOperation: 'admin_delete_deactivation',
+        changedAt: new Date(),
+      });
+    }
     return res.json({
       success: true,
       deactivated: true,
@@ -335,41 +375,50 @@ export const getTransactions = asyncHandler(async (req, res) => {
   res.json({ success: true, transactions, pagination: buildMeta(total, page, limit) });
 });
 
-/* --------------------------- Supplier (RemaData) --------------------------- */
+/* -------------------------- Supplier (PadodaTagh) -------------------------- */
 
 export const getSupplierBalance = asyncHandler(async (req, res) => {
-  if (!dataProvider.isDataProviderConfigured()) {
+  if (req.query.supplier && req.query.supplier !== 'PadodaTagh') {
+    throw new AppError('Only PadodaTagh is an active supplier.', 409, 'SUPPLIER_RETIRED');
+  }
+  if (!dataProvider.isDataProviderConfigured('PadodaTagh')) {
     return res.json({
       success: true,
       configured: false,
-      name: 'RemaData',
-      balance: 0,
-      currency: 'GHS',
+      name: 'PadodaTagh',
+      balance: null,
+      currency: null,
     });
   }
 
-  const balanceData = await dataProvider.getProviderBalance();
+  const balanceData = await dataProvider.getProviderBalance('PadodaTagh');
   res.json({
     success: true,
     configured: true,
-    name: 'RemaData',
+    name: 'PadodaTagh',
     ...balanceData,
   });
 });
 
 export const getSupplierSyncStatus = asyncHandler(async (req, res) => {
-  const status = await getCatalogSyncStatus();
+  if (req.query.supplier && req.query.supplier !== 'PadodaTagh') {
+    throw new AppError('Only PadodaTagh is an active supplier.', 409, 'SUPPLIER_RETIRED');
+  }
+  const status = await getSupplierCatalogStatus('PadodaTagh');
   res.json({ success: true, ...status });
 });
 
 export const syncSupplierBundles = asyncHandler(async (req, res) => {
-  const result = await syncSupplierCatalog({ force: true });
+  if (req.body.supplier && req.body.supplier !== 'PadodaTagh') {
+    throw new AppError('Only PadodaTagh catalog synchronization is supported.', 409, 'SUPPLIER_RETIRED');
+  }
+  const result = await syncSupplierOffers({ supplier: 'PadodaTagh' });
 
   if (result.skipped) {
     return res.status(202).json({
       success: false,
       skipped: true,
-      message: result.message || 'A RemaData catalog sync is already in progress.',
+      message: result.message || 'A PadodaTagh catalog sync is already in progress.',
       status: result.status,
       lastStartedAt: result.lastStartedAt,
     });
@@ -377,7 +426,7 @@ export const syncSupplierBundles = asyncHandler(async (req, res) => {
 
   res.json({
     success: result.success,
-    message: result.message || 'RemaData catalog sync completed.',
+    message: result.message || 'PadodaTagh catalog sync completed.',
     summary: result.summary,
     status: result.status,
     skipped: result.skipped,
@@ -389,8 +438,12 @@ export const checkOrderSupplierStatus = asyncHandler(async (req, res) => {
   const lookup = OBJECT_ID.test(id) ? { _id: id } : { orderId: id };
   const order = await Order.findOne(lookup).populate('customer', 'name email phone');
   if (!order) throw new AppError('Order not found', 404);
+  if (!isExplicitPadodaTaghOrder(order)) {
+    throw new AppError('This historical supplier is retired; automatic status checks are unavailable.', 409, 'SUPPLIER_RETIRED');
+  }
 
   const check = await dataProvider.checkTransactionStatus({
+    supplier: 'PadodaTagh',
     reference: order.orderId,
     providerReference: order.providerReference || order.supplierReference,
   });
@@ -403,10 +456,59 @@ export const checkOrderSupplierStatus = asyncHandler(async (req, res) => {
   });
 });
 
-export const getSupplierOrders = asyncHandler(async (req, res) => {
-  if (!dataProvider.isDataProviderConfigured()) {
-    throw new AppError('RemaData supplier is not configured', 400);
+export const getSupplierManagement = asyncHandler(async (req, res) => {
+  const [status, padodaCatalog, padodaPending] = await Promise.all([
+    getPublicSupplierStatus(),
+    getSupplierCatalogStatus('PadodaTagh'),
+    Order.countDocuments({ supplier: 'PadodaTagh', status: 'processing' }),
+  ]);
+
+  res.json({
+    success: true,
+    primarySupplier: 'PadodaTagh',
+    suppliers: {
+      ...status.suppliers,
+      padodatagh: { ...status.suppliers.padodatagh, configured: dataProvider.isDataProviderConfigured('PadodaTagh'), pendingOrders: padodaPending, catalog: padodaCatalog },
+    },
+  });
+});
+
+export const updateSupplierManagement = asyncHandler(async (req, res) => {
+  const control = await updateSupplierControl(req.body.suppliers);
+  res.json({ success: true, primarySupplier: 'PadodaTagh', suppliers: control.suppliers });
+});
+
+export const refreshSupplierHealth = asyncHandler(async (req, res) => {
+  const results = {};
+  const supplier = 'PadodaTagh';
+  const key = 'padodatagh';
+  if (!dataProvider.isDataProviderConfigured(supplier)) {
+    results[key] = { configured: false };
+  } else {
+
+    const current = await getSupplierControl();
+    const checkedAt = current.suppliers?.[key]?.lastHealthCheckAt;
+    if (checkedAt && Date.now() - new Date(checkedAt).getTime() < 60 * 1000) {
+      results[key] = { skipped: true, reason: 'rate_limited', lastHealthCheckAt: checkedAt };
+    } else try {
+      const started = Date.now();
+      await dataProvider.getAvailablePackages(undefined, supplier);
+      let balance = null;
+      let currency = 'GHS';
+      try {
+        const balanceData = await dataProvider.getProviderBalance(supplier);
+        balance = Number(balanceData.balance);
+        currency = balanceData.currency || currency;
+      } catch (error) {
+        console.warn(`[supplier-health] ${supplier} balance check failed:`, error.message);
+      }
+      await recordSupplierHealth(key, { ok: true, responseTimeMs: Date.now() - started, balance, currency });
+      results[key] = { healthy: true, balanceAvailable: Number.isFinite(balance) };
+    } catch (error) {
+      await recordSupplierHealth(key, { ok: false, responseTimeMs: null, errorCode: error.code });
+      results[key] = { healthy: false, error: error.code || 'SUPPLIER_CHECK_FAILED' };
+    }
   }
-  const orders = await remadata.getOrders(req.query);
-  res.json({ success: true, supplierOrders: orders });
+  const status = await getPublicSupplierStatus();
+  res.json({ success: true, results, suppliers: status.suppliers });
 });

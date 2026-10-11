@@ -20,8 +20,10 @@ const transactionSchema = new mongoose.Schema(
     amount: { type: Number, required: true },
     balanceAfter: { type: Number },
     status: { type: String, enum: ['pending', 'successful', 'failed'], default: 'successful' },
+    operationKey: { type: String, default: undefined },
     reference: { type: String, index: true },
     providerReference: { type: String },
+    supplier: { type: String, enum: ['PadodaTagh', 'RemaData'], default: null, index: true },
     description: { type: String },
     metadata: { type: mongoose.Schema.Types.Mixed },
   },
@@ -31,5 +33,6 @@ const transactionSchema = new mongoose.Schema(
 // Compound indexes for user-scoped queries (wallet history, order ledger)
 transactionSchema.index({ user: 1, type: 1, createdAt: -1 });
 transactionSchema.index({ user: 1, order: 1, createdAt: -1 });
+transactionSchema.index({ operationKey: 1 }, { unique: true, sparse: true });
 
 export default mongoose.model('Transaction', transactionSchema);

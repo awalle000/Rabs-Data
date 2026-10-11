@@ -137,7 +137,6 @@ export const createOrderRules = [
     .isIn(['direct', 'wallet'])
     .withMessage('Payment method must be direct or wallet'),
   body('idempotencyKey')
-    .optional({ values: 'falsy' })
     .trim()
     .isLength({ min: 16, max: 128 })
     .withMessage('The idempotency key must be 16 to 128 characters long')
@@ -210,9 +209,12 @@ const packageFields = (optional) => {
       .withMessage('Selling price must be 0 or more')
       .toFloat(),
     body('providerPackageCode').optional().trim().isLength({ max: 100 }),
-    body('isActive').optional().isBoolean().withMessage('isActive must be true or false').toBoolean(),
   ];
 };
 
 export const packageCreateRules = packageFields(false);
 export const packageUpdateRules = packageFields(true);
+export const packageActivationRules = [
+  body('isActive').exists().withMessage('isActive is required').bail()
+    .isBoolean().withMessage('isActive must be true or false').toBoolean(),
+];

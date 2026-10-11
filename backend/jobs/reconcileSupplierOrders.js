@@ -10,7 +10,7 @@ const BATCH_SIZE = 15;
 let running = false;
 
 export const reconcilePendingSupplierOrders = async () => {
-  if (running || !dataProvider.isDataProviderConfigured()) return;
+  if (running) return;
   running = true;
 
   try {
@@ -18,6 +18,7 @@ export const reconcilePendingSupplierOrders = async () => {
     const pendingOrders = await Order.find({
       status: 'processing',
       supplierSubmitted: true,
+      supplier: 'PadodaTagh',
       createdAt: {
         $lte: new Date(now - FIRST_CHECK_AFTER_MS),
         $gte: new Date(now - GIVE_UP_AFTER_MS),
@@ -27,6 +28,7 @@ export const reconcilePendingSupplierOrders = async () => {
       .limit(BATCH_SIZE);
 
     for (const order of pendingOrders) {
+      if (!dataProvider.isDataProviderConfigured(order.supplier)) continue;
       try {
         await safeReconcileSupplierOrder({ order });
       } catch (error) {

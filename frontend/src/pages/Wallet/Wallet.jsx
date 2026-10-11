@@ -70,6 +70,12 @@ export default function Wallet() {
     setFunding(true);
     try {
       const response = await paymentService.fundWallet(value);
+      if (response.pending) {
+        setNotice('Your existing top-up is still being verified. Your balance will update when payment is confirmed.');
+        setFunding(false);
+        return;
+      }
+      if (!response.payment?.authorizationUrl) throw new Error('The payment link is not ready yet. Check your wallet status before trying again.');
       window.location.assign(response.payment.authorizationUrl);
     } catch (err) {
       setFundError(

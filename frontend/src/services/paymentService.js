@@ -5,7 +5,9 @@ export const initializePayment = (payload) =>
 
 export const verifyPayment = (reference, token) =>
   api
-    .get(`/payments/${reference}/verify`, { params: token ? { token } : undefined })
+    .get(`/payments/${reference}/verify`, {
+      headers: token ? { 'X-Order-Tracking-Token': token } : undefined,
+    })
     .then((res) => res.data);
 
 export const getWallet = () => api.get('/wallet').then((res) => res.data);

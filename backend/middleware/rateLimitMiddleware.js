@@ -14,7 +14,7 @@ export const apiLimiter = build({
   windowMs: 15 * 60 * 1000,
   limit: 300,
   message: 'Too many requests. Please try again later.',
-  skip: (req) => req.originalUrl.includes('/webhook'),
+  skip: (req) => ['/api/payments/webhook', '/api/payments/webhook/paystack', '/api/webhooks/padodatagh'].includes(req.originalUrl.split('?')[0]),
 });
 
 export const authLimiter = build({
@@ -36,8 +36,8 @@ export const paymentLimiter = build({
 });
 
 export const lookupLimiter = build({
-  windowMs: 10 * 60 * 1000,
-  limit: 120,
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
   message: 'Too many lookups. Please try again shortly.',
 });
 
@@ -51,4 +51,10 @@ export const resetPasswordLimiter = build({
   windowMs: 15 * 60 * 1000,
   limit: 10,
   message: 'Too many password reset attempts. Please try again in 15 minutes.',
+});
+
+export const webhookLimiter = build({
+  windowMs: 60 * 1000,
+  limit: 120,
+  message: 'Too many webhook requests. Please try again later.',
 });

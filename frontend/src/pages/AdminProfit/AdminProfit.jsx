@@ -229,8 +229,8 @@ export default function AdminProfit() {
         <>
           <div className="profit-kpi-grid">
             <StatsCard label="Total Sales" value={formatCurrency(s.totalSales)} hint="Revenue from completed orders" icon="wallet" tone="success" />
-            <StatsCard label="Total Supplier Cost" value={formatCurrency(s.totalSupplierCost)} hint="Amount paid to RemaData" icon="receipt" tone="default" />
-            <StatsCard label="Total Payment Fees" value={formatCurrency(s.totalPaymentFees || 0)} hint="Hubtel processing fees" icon="tag" tone="default" />
+            <StatsCard label="Total Supplier Cost" value={formatCurrency(s.totalSupplierCost)} hint="Supplier cost recorded on each order" icon="receipt" tone="default" />
+            <StatsCard label="Total Payment Fees" value={formatCurrency(s.totalPaymentFees || 0)} hint={s.unreportedPaystackFees ? `${s.unreportedPaystackFees} Paystack fee(s) not reported` : 'Verified gateway fees'} icon="tag" tone="default" />
             <StatsCard label="Gross Profit" value={formatCurrency(s.grossProfit)} hint="Sales minus supplier cost" icon="tag" tone="success" />
             <StatsCard label="Net Profit" value={formatCurrency(s.netProfit ?? s.grossProfit)} hint="Gross profit minus gateway fees" icon="shield" tone="success" />
             <StatsCard label="Successful Payments" value={s.successfulPayments ?? s.completedOrders} hint="Confirmed payments" icon="check" tone="success" />
@@ -246,10 +246,10 @@ export default function AdminProfit() {
                 </strong>
                 <span className="stats-card__hint">
                   {wallet?.error
-                    ? `RemaData: ${wallet.error}`
+                    ? `PadodaTagh: ${wallet.error}`
                     : wallet?.checkedAt
                     ? `Updated ${formatDate(wallet.checkedAt)}`
-                    : 'RemaData wallet — not revenue'}
+                    : 'PadodaTagh wallet — not revenue'}
                 </span>
                 <span className="profit-wallet-note">Not revenue. Not profit.</span>
               </div>
@@ -266,7 +266,7 @@ export default function AdminProfit() {
               </div>
               <div className="profit-summary-divider">−</div>
               <div className="profit-summary-item">
-                <span className="profit-summary-item__label">Supplier Cost (RemaData)</span>
+                <span className="profit-summary-item__label">Supplier Cost</span>
                 <span className="profit-summary-item__value profit-red">{formatCurrency(s.totalSupplierCost)}</span>
               </div>
               <div className="profit-summary-divider">=</div>
@@ -407,16 +407,16 @@ export default function AdminProfit() {
             <p>The total amount customers paid for data bundles on completed orders.</p>
           </div>
           <div className="profit-legend-item">
-            <strong>Supplier Cost (RemaData)</strong>
-            <p>The amount charged by RemaData per order, snapshotted at purchase time. Supplier price changes do not affect historical records.</p>
+            <strong>Supplier Cost</strong>
+            <p>The supplier cost snapshotted at purchase time. Historical supplier records remain unchanged.</p>
           </div>
           <div className="profit-legend-item">
             <strong>Gross Profit</strong>
             <p>Revenue minus supplier cost. This is the money the business earns before any other expenses.</p>
           </div>
           <div className="profit-legend-item">
-            <strong>Supplier Working Capital (RemaData Wallet)</strong>
-            <p>The balance pre-loaded on the RemaData account to fund data purchases. This is NOT revenue and NOT profit — it is operational capital.</p>
+            <strong>Supplier Working Capital (PadodaTagh Wallet)</strong>
+            <p>The balance pre-loaded on the PadodaTagh account to fund data purchases. This is NOT revenue and NOT profit — it is operational capital.</p>
           </div>
           <div className="profit-legend-item">
             <strong>Profit Margin %</strong>

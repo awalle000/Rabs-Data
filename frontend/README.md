@@ -18,3 +18,7 @@ If you are developing a production application, we recommend using TypeScript wi
 ## Backend startup
 
 The frontend makes bounded, safe `GET /api/health` checks while the backend starts. The total wait defaults to 120 seconds; set `VITE_BACKEND_MAX_WAIT_MS` in the Vercel build environment to change it. The health status does not verify payment-provider or data-supplier availability; those remain checked by their respective API operations.
+
+## Production deployment
+
+Set `VITE_API_URL` in the Vercel project build environment to the deployed backend origin (for example, `https://api.example.com`, without a trailing path). The frontend appends `/api`; without this setting, local development defaults to `http://localhost:5000` and a deployed site cannot reach the backend. Allow the exact deployed frontend origin in the backend `CLIENT_URL` setting. Use Node.js 22.12 or newer for frontend builds and backend runtime.

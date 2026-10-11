@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import useAsync from '../../hooks/useAsync.js';
 import {
   getPackages,
@@ -26,15 +26,30 @@ export default function AdminPricing() {
   const [notice, setNotice] = useState(null);
 
   const packages = data?.packages || [];
+  const now = Date.now();
+  const freshPadodaOffers = packages.filter((pkg) => {
+    const offer = pkg.supplierOffers?.padodatagh;
+    const verifiedAt = offer?.lastVerifiedAt ? new Date(offer.lastVerifiedAt).getTime() : 0;
+    return offer?.catalogVerified === true && verifiedAt > 0 && now - verifiedAt <= 30 * 60 * 1000;
+  });
+  const padodaOffersNeedingSetup = freshPadodaOffers.filter((pkg) =>
+    !pkg.isActive || Number(pkg.sellingPrice) < Number(pkg.providerCost)
+  );
 
   const current = (pkg) => ({
     providerCost: edits[pkg._id]?.providerCost ?? String(pkg.providerCost),
     sellingPrice: edits[pkg._id]?.sellingPrice ?? String(pkg.sellingPrice),
+    bundleType: edits[pkg._id]?.bundleType ?? pkg.bundleType ?? '',
+    restrictions: edits[pkg._id]?.restrictions ?? (Array.isArray(pkg.restrictions) ? pkg.restrictions.join(', ') : ''),
+    restrictionsVerified: edits[pkg._id]?.restrictionsVerified ?? Array.isArray(pkg.restrictions),
   });
 
   const isDirty = (pkg) => {
-    const { providerCost, sellingPrice } = current(pkg);
-    return num(providerCost) !== pkg.providerCost || num(sellingPrice) !== pkg.sellingPrice;
+    const values = current(pkg);
+    const storedRestrictions = Array.isArray(pkg.restrictions) ? pkg.restrictions.join(', ') : '';
+    return num(values.providerCost) !== pkg.providerCost || num(values.sellingPrice) !== pkg.sellingPrice
+      || values.bundleType !== (pkg.bundleType || '') || values.restrictions !== storedRestrictions
+      || values.restrictionsVerified !== Array.isArray(pkg.restrictions);
   };
 
   const problemWith = (pkg) => {
@@ -57,11 +72,20 @@ export default function AdminPricing() {
       setRowErrors((previous) => ({ ...previous, [pkg._id]: problem }));
       return false;
     }
-    const { providerCost, sellingPrice } = current(pkg);
+    const values = current(pkg);
+    const { providerCost, sellingPrice } = values;
+    const metadataEdited = ['bundleType', 'restrictions', 'restrictionsVerified'].some((field) => Object.hasOwn(edits[pkg._id] || {}, field));
+    const payload = { providerCost: num(providerCost), sellingPrice: num(sellingPrice) };
+    if (metadataEdited) {
+      payload.bundleType = values.bundleType.trim();
+      payload.restrictions = values.restrictionsVerified
+        ? values.restrictions.split(',').map((value) => value.trim()).filter(Boolean)
+        : null;
+    }
 
     setSavingIds((ids) => [...ids, pkg._id]);
     try {
-      await updatePackage(pkg._id, { providerCost: num(providerCost), sellingPrice: num(sellingPrice) });
+      await updatePackage(pkg._id, payload);
       setEdits((previous) => {
         const next = { ...previous };
         delete next[pkg._id];
@@ -103,16 +127,21 @@ export default function AdminPricing() {
     setNotice(null);
     try {
       const res = await syncSupplierBundles();
+      if (!res.success) {
+        setNotice({ type: 'danger', text: res.message || 'PadodaTagh catalog refresh did not complete.' });
+        reloadSyncStatus();
+        return;
+      }
       setNotice({
         type: 'success',
-        text: res.message || 'Bundles synced from RemaData successfully.',
+        text: res.message || 'Bundles synced from PadodaTagh successfully.',
       });
       reload();
       reloadSyncStatus();
     } catch (err) {
       setNotice({
         type: 'danger',
-        text: getErrorMessage(err) || 'Failed to sync bundles from RemaData.',
+        text: getErrorMessage(err) || 'Failed to sync bundles from PadodaTagh.',
       });
     } finally {
       setIsSyncing(false);
@@ -147,6 +176,42 @@ export default function AdminPricing() {
           value={current(pkg).providerCost}
           onChange={handleChange(pkg, 'providerCost')}
         />
+      ),
+    },
+    {
+      key: 'bundleType',
+      label: 'Bundle type',
+      render: (pkg) => (
+        <input
+          type="text"
+          className="field__control pricing__input"
+          aria-label={`Bundle type for ${pkg.network} ${pkg.name}`}
+          value={current(pkg).bundleType}
+          onChange={handleChange(pkg, 'bundleType')}
+        />
+      ),
+    },
+    {
+      key: 'restrictions',
+      label: 'Restrictions',
+      render: (pkg) => (
+        <span className="pricing__restrictions">
+          <input
+            type="checkbox"
+            aria-label={`Confirm restrictions for ${pkg.network} ${pkg.name}`}
+            checked={current(pkg).restrictionsVerified}
+            onChange={(event) => setEdits((previous) => ({ ...previous, [pkg._id]: { ...current(pkg), restrictionsVerified: event.target.checked } }))}
+          />
+          <input
+            type="text"
+            className="field__control pricing__input"
+            aria-label={`Restriction list for ${pkg.network} ${pkg.name}`}
+            placeholder="Comma-separated"
+            value={current(pkg).restrictions}
+            onChange={handleChange(pkg, 'restrictions')}
+            disabled={!current(pkg).restrictionsVerified}
+          />
+        </span>
       ),
     },
     {
@@ -205,13 +270,21 @@ export default function AdminPricing() {
     },
   ];
 
+  const syncStatusLabel = syncData?.status === 'syncing'
+    ? 'Running'
+    : syncData?.status === 'error'
+      ? 'Failed'
+      : syncData?.lastSuccessfulAt
+        ? 'Idle (last run completed)'
+        : 'Not run';
+
   if (loading && !data) return <Loader label="Loading prices..." />;
   if (error) return <Alert onRetry={reload}>{error}</Alert>;
 
   return (
     <div className="pricing">
       <div className="pricing__top">
-        <p className="muted">Edit your provider cost and the price customers pay. Profit updates as you type.</p>
+        <p className="muted">Edit prices and confirm package identity details. Profit updates as you type.</p>
         <div style={{ display: 'flex', gap: '0.75rem' }}>
           <button
             type="button"
@@ -219,7 +292,7 @@ export default function AdminPricing() {
             disabled={isSyncing}
             onClick={handleSyncSupplier}
           >
-            {isSyncing ? 'Syncing...' : 'Sync Bundles from RemaData'}
+            {isSyncing ? 'Syncing...' : 'Sync Bundles from PadodaTagh'}
           </button>
           <button type="button" className="btn btn--primary" disabled={dirtyPackages.length === 0} onClick={handleSaveAll}>
             Save all changes ({dirtyPackages.length})
@@ -229,11 +302,19 @@ export default function AdminPricing() {
 
       {notice && <Alert type={notice.type}>{notice.text}</Alert>}
 
+      {padodaOffersNeedingSetup.length > 0 && (
+        <Alert type="warning" title="Verified offers are not yet available to customers">
+          {padodaOffersNeedingSetup.length} fresh PadodaTagh offer(s) are inactive or priced below supplier cost. Set a retail price at or above cost here, then activate approved offers on the Packages page. No prices or activation settings were changed automatically.
+        </Alert>
+      )}
+
       {syncData && (
         <div className="card pricing__sync-status" style={{ marginBottom: '1rem' }}>
           <strong>Supplier sync status</strong>
           <div className="muted">
-            Status: {syncData.status || 'idle'}
+            Status: {syncStatusLabel}
+            {syncData.lastStartedAt ? ` · Last started: ${new Date(syncData.lastStartedAt).toLocaleString()}` : ''}
+            {syncData.lastFinishedAt ? ` · Last finished: ${new Date(syncData.lastFinishedAt).toLocaleString()}` : ''}
             {syncData.lastSuccessfulAt ? ` · Last successful sync: ${new Date(syncData.lastSuccessfulAt).toLocaleString()}` : ' · No successful sync yet'}
             {syncData.lastError ? ` · Last error: ${syncData.lastError}` : ''}
           </div>

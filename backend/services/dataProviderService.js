@@ -1,9 +1,9 @@
-import * as remadata from './remadataService.js';
+import * as padodatagh from './padodataghService.js';
 import AppError from '../utils/AppError.js';
 
 /*
  * Data provider abstraction layer.
- * Implemented using RemaData as the active supplier.
+ * PadodaTagh is the sole active supplier.
  *
  * Contract:
  * - isDataProviderConfigured() -> boolean
@@ -17,22 +17,31 @@ import AppError from '../utils/AppError.js';
  * - parseWebhookEvent(rawBody) -> { reference, providerReference } | null
  */
 
-export const isDataProviderConfigured = () => remadata.isConfigured();
+const retiredSupplierError = () => {
+  const error = new AppError('Only PadodaTagh is an active supplier.', 409, 'SUPPLIER_RETIRED');
+  error.notSent = true;
+  return error;
+};
 
-export const getAvailablePackages = async (network) => {
-  const bundles = await remadata.getBundles(network);
-  return bundles.map((bundle) => {
-    const net = remadata.fromRemaDataNetwork(bundle.network);
-    return {
-      network: net,
-      providerPackageCode: `${remadata.toRemaDataNetwork(bundle.network)}_${bundle.volumeInMB}`,
-      name: bundle.name || `${bundle.volume} Bundle`,
-      dataAmount: bundle.volume || `${Number(bundle.volumeInMB) / 1024}GB`,
-      volumeInMB: Number(bundle.volumeInMB),
-      cost: Number(bundle.price), // Supplier account-specific API price
-      description: bundle.description || '',
-    };
-  });
+export const isDataProviderConfigured = (supplier = 'PadodaTagh') =>
+  supplier === 'PadodaTagh' && padodatagh.isConfigured();
+
+export const getAvailablePackages = async (network, supplier = 'PadodaTagh') => {
+  if (supplier !== 'PadodaTagh') throw retiredSupplierError();
+
+  return (await padodatagh.getOffers())
+    .filter((offer) => !network || offer.network === network)
+    .map((offer) => ({
+      network: offer.network,
+      providerPackageCode: offer.providerPackageCode,
+      offerId: offer.offerId,
+      name: offer.name,
+      dataAmount: offer.dataAmount,
+      validity: offer.validity,
+      volumeInMB: offer.volumeInMB,
+      cost: offer.providerCost,
+      description: offer.description,
+    }));
 };
 
 let mockPurchaser = null;
@@ -41,141 +50,67 @@ export const setMockPurchaser = (fn) => {
 };
 
 export const purchaseData = async ({
+  supplier,
   reference,
   network,
   providerPackageCode,
   dataAmount,
   recipientPhone,
   volumeInMB,
+  supplierCost,
 }) => {
+  if (supplier !== 'PadodaTagh') throw retiredSupplierError();
+
   if (mockPurchaser) {
-    return mockPurchaser({ reference, network, providerPackageCode, dataAmount, recipientPhone, volumeInMB });
-  }
-  // Resolve volume in MB: priority is explicit volumeInMB, then fallback to parsing dataAmount
-  let resolvedVolume = Number(volumeInMB);
-  if (!resolvedVolume || resolvedVolume <= 0) {
-    resolvedVolume = remadata.parseVolumeInMB(dataAmount);
-  }
-  if (!resolvedVolume || resolvedVolume <= 0) {
-    if (providerPackageCode && providerPackageCode.includes('_')) {
-      const parts = providerPackageCode.split('_');
-      resolvedVolume = Number(parts[parts.length - 1]);
-    }
+    return mockPurchaser({ supplier, reference, network, providerPackageCode, dataAmount, recipientPhone, volumeInMB, supplierCost });
   }
 
-  if (!resolvedVolume || resolvedVolume <= 0) {
-    const err = new AppError('Could not determine data volume for supplier purchase', 400, 'INVALID_VOLUME');
-    err.notSent = true;
-    throw err;
-  }
-
-  const result = await remadata.buyData({
-    ref: reference,
-    phone: recipientPhone,
-    volumeInMB: resolvedVolume,
-    networkType: network,
-  });
-
+  const result = await padodatagh.buyData({ reference, network, providerPackageCode, recipientPhone, volumeInMB, supplierCost });
   return {
-    status: result.status, // 'successful' | 'processing' | 'failed'
-    supplierStatus: result.supplierStatus, // 'pending' | 'completed' | 'failed' | 'refunded'
-    providerReference: result.providerReference,
-    clientReference: result.clientReference || reference,
-    supplierCost: result.amount,
-    refunded: Boolean(result.refunded),
-    message: result.message,
+    ...result,
+    confirmedNotAccepted: false,
   };
 };
 
-export const checkTransactionStatus = async ({ reference, providerReference }) => {
-  // If we have the supplier reference, query order status endpoint directly
-  if (providerReference) {
-    try {
-      const res = await remadata.getOrderStatus(providerReference);
-      return res;
-    } catch (err) {
-      console.warn(`[dataProvider] getOrderStatus(${providerReference}) failed:`, err.message);
-      // Fallback to checking by custom reference if available
-    }
+export const checkTransactionStatus = async ({ supplier, reference, providerReference }) => {
+  if (supplier !== 'PadodaTagh') {
+    return { status: 'uncertain', supplierStatus: 'uncertain', providerReference: providerReference || null, refunded: false, message: 'Historical order supplier is retired; no automatic status request was made.' };
   }
 
-  // Lookup by MariData order reference (orderId)
-  if (reference) {
+  {
     try {
-      const supplierOrder = await remadata.getOrderByReference(reference);
-      if (supplierOrder) {
-        const rawStatus = String(supplierOrder.status || '').toLowerCase();
-        let status = 'processing';
-        if (rawStatus === 'completed') status = 'successful';
-        else if (rawStatus === 'failed') status = 'failed';
-        else if (rawStatus === 'refunded') status = 'failed';
-
-        return {
-          status,
-          supplierStatus: rawStatus,
-          providerReference: supplierOrder.reference || supplierOrder.ref_number || providerReference,
-          refunded: rawStatus === 'refunded' || Boolean(supplierOrder.refunded),
-          message: `Supplier status: ${rawStatus}`,
-        };
+      const bySupplierId = await padodatagh.getOrderStatus({ reference, providerReference });
+      if (bySupplierId.status !== 'uncertain') return bySupplierId;
+    } catch (error) {
+      console.warn(`[dataProvider] PadodaTagh status lookup failed for ${reference}:`, error.message);
+      if (error.responseStatus !== 404) {
+        return { status: 'uncertain', supplierStatus: 'uncertain', providerReference: providerReference || null, refunded: false, message: 'Could not determine PadodaTagh order status' };
       }
-    } catch (lookupErr) {
-      console.warn(`[dataProvider] getOrderByReference(${reference}) failed:`, lookupErr.message);
     }
-  }
 
-  return {
-    status: 'uncertain',
-    supplierStatus: 'uncertain',
-    providerReference: providerReference || null,
-    refunded: false,
-    message: 'Could not determine supplier order status',
-  };
-};
-
-export const getProviderBalance = async () => {
-  return remadata.getWalletBalance();
-};
-
-export const verifyWebhookSignature = () => false;
-
-export const parseWebhookEvent = (rawBody) => {
-  try {
-    const parsed = JSON.parse(rawBody.toString('utf8'));
-    const data = parsed?.Data || parsed?.data || parsed;
-    const reference =
-      data?.reference ||
-      data?.Reference ||
-      data?.clientReference ||
-      data?.ClientReference ||
-      data?.orderId ||
-      data?.order_id ||
-      data?.ref ||
-      null;
-    const providerReference =
-      data?.providerReference ||
-      data?.ProviderReference ||
-      data?.referenceNumber ||
-      data?.ReferenceNumber ||
-      data?.transactionId ||
-      data?.TransactionId ||
-      data?.ref_number ||
-      null;
-    const rawStatus = String(data?.status || data?.Status || data?.supplierStatus || data?.SupplierStatus || '').toLowerCase();
-    const normalizedStatus = rawStatus === 'completed' ? 'successful' : rawStatus === 'failed' ? 'failed' : rawStatus === 'refunded' ? 'refunded' : rawStatus || 'unknown';
-
-    return reference
-      ? {
-          reference: String(reference),
-          providerReference: providerReference ? String(providerReference) : null,
-          status: normalizedStatus,
-          amount: data?.amount ?? data?.Amount ?? null,
-          currency: data?.currency ?? data?.Currency ?? 'GHS',
-          supplierStatus: rawStatus || null,
-          message: data?.message || data?.Message || null,
-          raw: data,
+    if (reference && reference !== providerReference) {
+      try {
+        const byMerchantReference = await padodatagh.getOrderStatus({ reference, providerReference: null });
+        if (byMerchantReference.status !== 'uncertain') return byMerchantReference;
+      } catch (error) {
+        if (error.responseStatus !== 404) {
+          return { status: 'uncertain', supplierStatus: 'uncertain', providerReference: providerReference || null, refunded: false, message: 'Could not determine PadodaTagh order status' };
         }
-      : null;
-  } catch {
-    return null;
+      }
+    }
+
+    try {
+      const historyResult = await padodatagh.getHistoryOrder(reference);
+      if (historyResult) return historyResult;
+    } catch (error) {
+      console.warn(`[dataProvider] PadodaTagh history lookup failed for ${reference}:`, error.message);
+    }
+    return { status: 'uncertain', supplierStatus: 'uncertain', providerReference: providerReference || null, refunded: false, message: 'Could not determine PadodaTagh order status' };
   }
+
+};
+
+export const getProviderBalance = async (supplier = 'PadodaTagh') => {
+  if (supplier !== 'PadodaTagh') throw retiredSupplierError();
+  return padodatagh.getBalance();
 };

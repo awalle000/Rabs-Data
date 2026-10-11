@@ -3,6 +3,7 @@ import env from '../config/environment.js';
 import User from '../models/User.js';
 import AppError from '../utils/AppError.js';
 import asyncHandler from '../utils/asyncHandler.js';
+import { tokenVersionMatches } from '../utils/tokenVersion.js';
 
 export const protect = asyncHandler(async (req, res, next) => {
   const header = req.headers.authorization || '';
@@ -11,10 +12,14 @@ export const protect = asyncHandler(async (req, res, next) => {
   if (!token) throw new AppError('Not authorized. Please log in.', 401);
 
   const decoded = jwt.verify(token, env.jwtSecret);
-  const user = await User.findById(decoded.id);
+  const user = await User.findById(decoded.id).select('+tokenVersion');
 
   if (!user || !user.isActive) {
     throw new AppError('Account not found or deactivated', 401);
+  }
+
+  if (!tokenVersionMatches(decoded.tokenVersion, user.tokenVersion)) {
+    throw new AppError('Session expired. Please log in again.', 401, 'TOKEN_EXPIRED');
   }
 
   if (user.passwordChangedAt) {
@@ -43,8 +48,9 @@ export const optionalAuth = async (req, res, next) => {
   }
 
   try {
-    const user = await User.findById(decoded.id);
+    const user = await User.findById(decoded.id).select('+tokenVersion');
     if (user && user.isActive) {
+      if (!tokenVersionMatches(decoded.tokenVersion, user.tokenVersion)) return next();
       if (user.passwordChangedAt) {
         const changedTimestamp = parseInt(user.passwordChangedAt.getTime() / 1000, 10);
         if (decoded.iat < changedTimestamp) return next();

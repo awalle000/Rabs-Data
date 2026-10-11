@@ -1,0 +1,1 @@
+export const isExplicitPadodaTaghOrder = (order) => order?.supplier === 'PadodaTagh';

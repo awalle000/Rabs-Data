@@ -10,54 +10,90 @@ import AppError from '../utils/AppError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { roundMoney } from '../utils/money.js';
 import { getPagination, buildMeta } from '../utils/pagination.js';
-import { getPurchaseOperationState, markPurchaseOperationCreated } from '../utils/purchaseIdempotency.js';
+import { getPurchaseOperationState, markPurchaseOperationCreated, markPurchaseOperationCompleted } from '../utils/purchaseIdempotency.js';
 
-import { parseVolumeInMB } from '../services/remadataService.js';
 import { calculateOrderPricing, calculateProfits } from '../utils/paymentFees.js';
+import { notifyAdminsSafely } from '../services/adminNotificationService.js';
+import { orderCreatedNotification } from '../services/adminNotificationEvents.js';
+import { getSupplierControl } from '../services/supplierControlService.js';
+import * as dataProvider from '../services/dataProviderService.js';
+import { isEligiblePadodaPackage } from '../services/supplierCatalogService.js';
 
 const ACTIVE_STATUSES = ['pending', 'payment_pending', 'paid', 'processing'];
 const DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
 const OBJECT_ID = /^[a-f\d]{24}$/i;
 
 const inFlightOrders = new Set();
+const parseVolumeInMB = (value) => {
+  const match = String(value || '').trim().match(/^([\d.]+)\s*(gb|mb)?$/i);
+  if (!match) return 0;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return 0;
+  return Math.round(match[2]?.toLowerCase() === 'mb' ? amount : amount * 1024);
+};
+
+const notifyNewOrder = (order) => notifyAdminsSafely(orderCreatedNotification(order));
 
 // Works for guests (no req.user) and logged-in customers.
 export const createOrder = asyncHandler(async (req, res) => {
   const { packageId, recipientPhone, paymentMethod = 'direct' } = req.body;
   const buyer = req.user || null;
-  const idempotencyKey = req.body.idempotencyKey || undefined;
+  const idempotencyKey = typeof req.body.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
+  if (!idempotencyKey) {
+    throw new AppError('An idempotency key is required for order creation.', 400, 'IDEMPOTENCY_KEY_REQUIRED');
+  }
+  if (!dataProvider.isDataProviderConfigured('PadodaTagh')) {
+    throw new AppError('Data purchases are temporarily unavailable because the primary supplier is not configured.', 503, 'PRIMARY_SUPPLIER_UNAVAILABLE');
+  }
+  const supplierControl = await getSupplierControl();
+  if (supplierControl.suppliers?.padodatagh?.enabled === false) {
+    throw new AppError('Data purchases are temporarily unavailable from the primary supplier.', 503, 'PRIMARY_SUPPLIER_UNAVAILABLE');
+  }
+
   const operationState = await getPurchaseOperationState({
     key: idempotencyKey,
     customerId: buyer?._id,
     payload: {
       packageId,
       recipientPhone,
+      network: req.body.network,
+      amount: req.body.amount,
       paymentMethod,
       contactPhone: req.body.contactPhone || buyer?.phone || recipientPhone,
       contactEmail: req.body.contactEmail || buyer?.email,
     },
   });
 
-  if (!operationState.isNew && operationState.operation?.order) {
-    const existingOrder = await Order.findById(operationState.operation.order);
+  if (!operationState.isNew) {
+    const existingOrder = operationState.operation?.order
+      ? await Order.findById(operationState.operation.order).select('+trackingToken')
+      : await Order.findOne({ purchaseOperation: operationState.operation?._id }).select('+trackingToken');
     if (existingOrder) {
+      if (!operationState.operation.order) {
+        await markPurchaseOperationCreated({
+          key: operationState.key,
+          orderId: existingOrder._id,
+          payload: operationState.operation.payloadSnapshot,
+        });
+      }
       return res.status(200).json({
         success: true,
         order: existingOrder.toCustomerJSON(),
-        idempotencyKey: operationState.key,
+        trackingToken: existingOrder.trackingToken,
+        idempotencyKey: operationState.clientKey,
         duplicate: true,
         status: operationState.operation.status,
       });
     }
-  }
-
-  if (!operationState.isNew && operationState.operation?.status === 'processing' && !operationState.operation?.order) {
-    return res.status(202).json({
-      success: true,
-      message: 'A purchase with this key is already being processed.',
-      idempotencyKey: operationState.key,
-      status: operationState.operation.status,
-    });
+    if (['processing', 'created'].includes(operationState.operation?.status)) {
+      return res.status(202).json({
+        success: true,
+        message: 'A purchase with this key is already being processed.',
+        idempotencyKey: operationState.clientKey,
+        status: operationState.operation.status,
+      });
+    }
+    throw new AppError('This purchase operation cannot be repeated with its current status.', 409, 'IDEMPOTENCY_OPERATION_TERMINAL');
   }
 
   if (paymentMethod === 'wallet') {
@@ -72,6 +108,16 @@ export const createOrder = asyncHandler(async (req, res) => {
     network: { $in: getEnabledNetworkCodes() },
   });
   if (!dataPackage) throw new AppError('This data package is not available', 404, 'INVALID_PACKAGE');
+
+  const primaryOffer = dataPackage.supplierOffers?.padodatagh;
+  if (!isEligiblePadodaPackage(dataPackage)) {
+    await markPurchaseOperationCompleted({
+      key: operationState.key,
+      status: 'failed',
+      payload: { packageId: String(packageId), recipientPhone, paymentMethod, reason: 'primary_offer_unavailable_or_stale' },
+    });
+    throw new AppError('This package is not currently available from the primary supplier.', 503, 'PRIMARY_SUPPLIER_UNAVAILABLE');
+  }
 
   const contactPhone = req.body.contactPhone || buyer?.phone || recipientPhone;
   const contactEmail = req.body.contactEmail || buyer?.email;
@@ -111,7 +157,7 @@ export const createOrder = asyncHandler(async (req, res) => {
   const pricing = calculateOrderPricing(dataPackage.sellingPrice);
   const profits = calculateProfits({
     baseProductPrice: pricing.baseProductPrice,
-    supplierCost: dataPackage.providerCost,
+    supplierCost: primaryOffer.supplierCost,
     paymentGatewayFee: pricing.paymentGatewayFee,
     feePassedToCustomer: pricing.feePassedToCustomer,
   });
@@ -128,18 +174,23 @@ export const createOrder = asyncHandler(async (req, res) => {
       dataAmount: dataPackage.dataAmount,
       volumeInMB,
       validity: dataPackage.validity,
-      providerPackageCode: dataPackage.providerPackageCode,
+      providerPackageCode: primaryOffer.packageCode,
       recipientPhone,
       sellingPrice: dataPackage.sellingPrice,
       baseProductPrice: pricing.baseProductPrice,
       customerChargedAmount: pricing.customerChargedAmount,
       paymentGatewayFee: pricing.paymentGatewayFee,
-      providerCost: dataPackage.providerCost,
+      paymentGatewayFeeKnown: paymentMethod === 'wallet',
+      feePassedToCustomer: pricing.feePassedToCustomer,
+      providerCost: primaryOffer.supplierCost,
       profit: profits.grossProfit,
       grossProfit: profits.grossProfit,
       netProfit: profits.netProfit,
-      supplier: 'RemaData',
-      supplierCost: dataPackage.providerCost,
+      supplier: 'PadodaTagh',
+      supplierOfferSnapshot: {
+        padodatagh: { packageCode: primaryOffer.packageCode, supplierCost: primaryOffer.supplierCost, network: primaryOffer.network, volumeInMB: primaryOffer.volumeInMB, validity: primaryOffer.validity, bundleType: primaryOffer.bundleType || '', restrictions: primaryOffer.restrictions ?? null },
+      },
+      supplierCost: primaryOffer.supplierCost,
       supplierClientReference: orderId,
       supplierStatus: 'not_started',
       paymentMethod,
@@ -154,6 +205,8 @@ export const createOrder = asyncHandler(async (req, res) => {
       payload: {
         packageId: dataPackage._id.toString(),
         recipientPhone,
+        network: dataPackage.network,
+        amount: pricing.customerChargedAmount,
         paymentMethod,
         contactPhone,
         contactEmail,
@@ -169,24 +222,36 @@ export const createOrder = asyncHandler(async (req, res) => {
           description: `Payment for ${order.orderId}`,
           reference: order.orderId,
           orderId: order._id,
+          operationKey: `wallet-debit:${operationState.key}`,
         });
       } catch (error) {
-        await Order.deleteOne({ _id: order._id }); // no money moved, discard the order
+        if (error.code === 'INSUFFICIENT_BALANCE') {
+          await Order.deleteOne({ _id: order._id });
+          await markPurchaseOperationCompleted({
+            key: operationState.key,
+            status: 'failed',
+            payload: { reason: 'insufficient_wallet_balance' },
+          });
+        } else {
+          await Order.updateOne({ _id: order._id }, { $set: { needsReview: true, failureReason: 'Wallet debit is being recovered; do not retry payment or purchase.' } });
+        }
         throw error;
       }
 
       const paid = await markOrderPaid(order._id, `WALLET-${order.orderId}`);
+  await notifyNewOrder(order);
       const finalOrder = paid ? await fulfillOrder(paid._id) : order;
       return res.status(201).json({ success: true, order: finalOrder.toCustomerJSON() });
     }
 
     // Direct payment: the buyer now calls POST /api/payments/initialize.
     // The tracking token is returned ONCE, here, so the guest's browser can keep it.
+    await notifyNewOrder(order);
     return res.status(201).json({
       success: true,
       order: order.toCustomerJSON(),
       trackingToken: order.trackingToken,
-      idempotencyKey: operationState.key,
+      idempotencyKey: operationState.clientKey,
     });
   } finally {
     // Release in-flight lock after short delay so DB persistence is fully complete

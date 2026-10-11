@@ -1,5 +1,6 @@
 import { Link, NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { useAdminNotifications } from '../../hooks/useAdminNotifications.js';
 import Icon from '../Icon/Icon.jsx';
 import './Sidebar.css';
 
@@ -10,12 +11,15 @@ const ITEMS = [
   { to: '/admin/packages', label: 'Packages', icon: 'package' },
   { to: '/admin/pricing', label: 'Pricing', icon: 'tag' },
   { to: '/admin/transactions', label: 'Transactions', icon: 'receipt' },
+  { to: '/admin/notifications', label: 'Notifications', icon: 'bell' },
+  { to: '/admin/suppliers', label: 'Suppliers', icon: 'package' },
   { to: '/admin/profit', label: 'Profit Analytics', icon: 'wallet' },
   { to: '/admin/register', label: 'Admins', icon: 'shield' },
 ];
 
 export default function Sidebar() {
   const { logout } = useAuth();
+  const { unreadCount } = useAdminNotifications();
 
   return (
     <aside className="sidebar">
@@ -34,6 +38,11 @@ export default function Sidebar() {
           >
             <Icon name={item.icon} size={20} />
             <span>{item.label}</span>
+            {item.to === '/admin/notifications' && unreadCount > 0 && (
+              <span className="sidebar__notification-count" aria-label={`${unreadCount} unread`}>
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
           </NavLink>
         ))}
       </nav>

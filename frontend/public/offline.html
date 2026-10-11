@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0a7d4f" />
+    <title>You're offline | RabsData</title>
+    <style>
+      :root { color-scheme: light; font-family: system-ui, sans-serif; color: #0f172a; background: #f5f7fa; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; }
+      main { width: min(100% - 2rem, 28rem); text-align: center; }
+      img { width: 96px; height: 96px; object-fit: contain; }
+      h1 { margin: 1rem 0 0.5rem; font-size: 1.5rem; }
+      p { color: #5b6b82; line-height: 1.6; }
+      button { margin-top: 0.75rem; border: 0; border-radius: 6px; padding: 0.75rem 1rem; color: white; background: #0a7d4f; font: inherit; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/pwa-192.png" alt="RabsData" />
+      <h1>You're offline</h1>
+      <p>Connect to the internet to view current bundles, verify orders, or make a payment. Account and payment details are not available offline.</p>
+      <button type="button" onclick="location.reload()">Try again</button>
+    </main>
+  </body>
+</html>

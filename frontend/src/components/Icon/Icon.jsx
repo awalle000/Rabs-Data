@@ -17,6 +17,7 @@ const PATHS = {
   package: 'M21 8l-9-5-9 5v8l9 5 9-5V8zM3.3 7L12 12l8.7-5M12 22V12',
   tag: 'M20.6 13.4l-7.2 7.2a2 2 0 01-2.8 0L2 12V2h10l8.6 8.6a2 2 0 010 2.8zM7 7h.01',
   receipt: 'M4 2v20l3-2 3 2 3-2 3 2 3-2 1 1V2l-1 1-3-2-3 2-3-2-3 2-3-2zM8 8h8M8 12h8',
+  bell: 'M18 8a6 6 0 00-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4',
 };
 
 export default function Icon({ name, size = 20, className = '' }) {

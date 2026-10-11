@@ -14,16 +14,19 @@ export const creditCustomerWallet = (id, payload) =>
 export const getPackages = (params) => get('/admin/packages', params);
 export const createPackage = (payload) => api.post('/admin/packages', payload).then((res) => res.data);
 export const updatePackage = (id, payload) => api.put(`/admin/packages/${id}`, payload).then((res) => res.data);
+export const updatePackageActivation = (id, isActive) => api.patch(`/admin/packages/${id}/activation`, { isActive }).then((res) => res.data);
 export const deletePackage = (id) => api.delete(`/admin/packages/${id}`).then((res) => res.data);
 
 export const getTransactions = (params) => get('/admin/transactions', params);
 
 export const getSupplierBalance = () => get('/admin/supplier/balance');
 export const getSupplierSyncStatus = () => get('/admin/supplier/sync-status');
-export const syncSupplierBundles = () => api.post('/admin/supplier/sync-bundles').then((res) => res.data);
+export const getSupplierManagement = () => get('/admin/supplier/management');
+export const updateSupplierManagement = (suppliers) => api.put('/admin/supplier/management', { suppliers }).then((res) => res.data);
+export const refreshSupplierHealth = () => api.post('/admin/supplier/health-check').then((res) => res.data);
+export const syncSupplierBundles = (supplier = 'PadodaTagh') => api.post('/admin/supplier/sync-bundles', { supplier }).then((res) => res.data);
 export const checkOrderSupplierStatus = (id) =>
   api.post(`/admin/orders/${id}/check-supplier-status`).then((res) => res.data);
-export const getSupplierOrders = (params) => get('/admin/supplier/orders', params);
 export const registerAdmin = (payload) => api.post('/admin/register-admin', payload).then((res) => res.data);
 
 // ── Analytics / Profit Dashboard ──────────────────────────────────────

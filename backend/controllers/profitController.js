@@ -8,9 +8,9 @@
  *
  * Money flow reminder:
  *   sellingPrice  → what the customer paid (revenue)
- *   supplierCost  → what we paid RemaData (COGS)
+ *   supplierCost  → supplier cost recorded at purchase time (COGS)
  *   grossProfit   → sellingPrice - supplierCost
- *   RemaData wallet → working capital, never counted as revenue/profit
+ *   PadodaTagh wallet → working capital, never counted as revenue/profit
  */
 
 import Order from '../models/Order.js';
@@ -83,7 +83,8 @@ export const getProfitSummary = asyncHandler(async (req, res) => {
           totalSupplierCost: { $sum: '$supplierCost' },
           totalGrossProfit: { $sum: '$grossProfit' },
           totalNetProfit: { $sum: '$netProfit' },
-          totalPaymentFees: { $sum: '$paymentGatewayFee' },
+          totalPaymentFees: { $sum: { $cond: [{ $eq: ['$paymentGatewayFeeKnown', false] }, 0, '$paymentGatewayFee'] } },
+          unreportedPaystackFees: { $sum: { $cond: [{ $and: [{ $eq: ['$paymentProvider', 'paystack'] }, { $ne: ['$paymentGatewayFeeKnown', true] }] }, 1, 0] } },
           count: { $sum: 1 },
         },
       },
@@ -112,13 +113,13 @@ export const getProfitSummary = asyncHandler(async (req, res) => {
       },
     ]),
 
-    // RemaData wallet — best-effort, never crashes the dashboard
+    // Primary supplier wallet — best-effort, never crashes the dashboard
     (async () => {
-      if (!dataProvider.isDataProviderConfigured()) {
+      if (!dataProvider.isDataProviderConfigured('PadodaTagh')) {
         return { balance: null, currency: 'GHS', error: 'Supplier not configured', checkedAt: null };
       }
       try {
-        const b = await dataProvider.getProviderBalance();
+        const b = await dataProvider.getProviderBalance('PadodaTagh');
         return { balance: roundMoney(b.balance), currency: b.currency || 'GHS', error: null, checkedAt: new Date() };
       } catch (err) {
         return { balance: null, currency: 'GHS', error: err.message || 'Unavailable', checkedAt: null };
@@ -132,6 +133,7 @@ export const getProfitSummary = asyncHandler(async (req, res) => {
     totalGrossProfit: 0,
     totalNetProfit: 0,
     totalPaymentFees: 0,
+    unreportedPaystackFees: 0,
     count: 0,
   };
 
@@ -166,6 +168,7 @@ export const getProfitSummary = asyncHandler(async (req, res) => {
       totalSales,
       totalSupplierCost,
       totalPaymentFees,
+      unreportedPaystackFees: fin.unreportedPaystackFees || 0,
       grossProfit,
       netProfit,
       margin,
@@ -186,7 +189,7 @@ export const getProfitSummary = asyncHandler(async (req, res) => {
       error: walletResult.error,
       checkedAt: walletResult.checkedAt,
       label: 'Supplier Working Capital',
-      note: 'RemaData wallet is working capital used to purchase data. It is not revenue or profit.',
+      note: 'PadodaTagh wallet is working capital used for supplier purchases. It is not revenue or profit.',
     },
   });
 });
@@ -326,7 +329,7 @@ export const getRecentProfitTransactions = asyncHandler(async (req, res) => {
     .sort({ createdAt: -1 })
     .limit(limit)
     .select(
-      'orderId createdAt network packageName dataAmount sellingPrice baseProductPrice customerChargedAmount paymentGatewayFee supplierCost profit grossProfit netProfit status paymentStatus supplierStatus recipientPhone hubtelReference'
+      'orderId createdAt network packageName dataAmount sellingPrice baseProductPrice customerChargedAmount paymentGatewayFee supplierCost profit grossProfit netProfit status paymentStatus paymentProvider paymentReference supplierStatus recipientPhone hubtelReference'
     )
     .lean();
 
@@ -350,7 +353,8 @@ export const getRecentProfitTransactions = asyncHandler(async (req, res) => {
       supplierCost: cost,
       grossProfit: gross,
       netProfit: net,
-      hubtelReference: o.hubtelReference || '-',
+      paymentProvider: o.paymentProvider || (o.hubtelReference ? 'hubtel' : null),
+      paymentReference: o.paymentReference || o.hubtelReference || '-',
       paymentStatus: o.paymentStatus || (o.status === 'successful' ? 'paid' : 'pending'),
       status: o.status,
       supplierStatus: o.supplierStatus,
@@ -371,12 +375,12 @@ export const exportProfitCsv = asyncHandler(async (req, res) => {
     .sort({ createdAt: -1 })
     .limit(10000)
     .select(
-      'orderId createdAt network packageName dataAmount sellingPrice baseProductPrice customerChargedAmount paymentGatewayFee supplierCost profit grossProfit netProfit status paymentStatus supplierStatus hubtelReference'
+      'orderId createdAt network packageName dataAmount sellingPrice baseProductPrice customerChargedAmount paymentGatewayFee supplierCost profit grossProfit netProfit status paymentStatus paymentProvider paymentReference supplierStatus hubtelReference'
     )
     .lean();
 
   const header =
-    'Order ID,Date,Network,Bundle,Data Amount,Base Price (GHS),Customer Charged (GHS),Payment Fee (GHS),Supplier Cost (GHS),Gross Profit (GHS),Net Profit (GHS),Payment Status,Supplier Status,Hubtel Reference\n';
+    'Order ID,Date,Network,Bundle,Data Amount,Base Price (GHS),Customer Charged (GHS),Payment Fee (GHS),Supplier Cost (GHS),Gross Profit (GHS),Net Profit (GHS),Payment Status,Payment Provider,Supplier Status,Payment Reference\n';
   const rows = orders
     .map((o) => {
       const base = roundMoney(o.baseProductPrice ?? o.sellingPrice ?? 0);
@@ -400,8 +404,9 @@ export const exportProfitCsv = asyncHandler(async (req, res) => {
         gross,
         net,
         payStatus,
+        o.paymentProvider || (o.hubtelReference ? 'Hubtel' : ''),
         o.supplierStatus || '',
-        `"${(o.hubtelReference || '').replace(/"/g, '""')}"`,
+        `"${(o.paymentReference || o.hubtelReference || '').replace(/"/g, '""')}"`,
       ].join(',');
     })
     .join('\n');

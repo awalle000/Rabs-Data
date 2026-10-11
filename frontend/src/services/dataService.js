@@ -5,8 +5,19 @@ export const getNetworks = () => api.get('/data/networks').then((res) => res.dat
 export const getPackages = (network) =>
   api.get('/data/packages', { params: network ? { network } : undefined }).then((res) => res.data);
 
-// Networks and packages together, for the home and buy pages.
-export const getCatalog = async () => {
-  const [networks, packages] = await Promise.all([getNetworks(), getPackages()]);
-  return { networks: networks.networks, packages: packages.packages };
+let catalogRequest;
+
+// Share only an in-flight request; each completed call gets a fresh server snapshot.
+export const getCatalog = () => {
+  if (!catalogRequest) {
+    catalogRequest = api.get('/data/catalog')
+      .then((res) => res.data)
+      .catch(async (error) => {
+        if (error.response?.status !== 404) throw error;
+        const [networks, packages] = await Promise.all([getNetworks(), getPackages()]);
+        return { networks: networks.networks, packages: packages.packages, count: packages.count };
+      })
+      .finally(() => { catalogRequest = null; });
+  }
+  return catalogRequest;
 };

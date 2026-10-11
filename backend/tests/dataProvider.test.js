@@ -1,0 +1,83 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+process.env.PADODATAGH_API_KEY = 'padoda-test-key';
+process.env.PADODATAGH_BASE_URL = 'https://padodatagh.test/api/v1';
+
+const dataProvider = await import('../services/dataProviderService.js');
+
+const withFetch = async (handler, callback) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = handler;
+  try {
+    return await callback();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+};
+
+const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), {
+  status,
+  headers: { 'Content-Type': 'application/json' },
+});
+
+test('default supplier purchase dispatches to PadodaTagh with the persisted offer slug', async () => {
+  await withFetch(async (url, options) => {
+    assert.equal(url, 'https://padodatagh.test/api/v1/order/mtn');
+    assert.equal(options.headers['x-api-key'], 'padoda-test-key');
+    assert.equal(JSON.parse(options.body).offer_slug, 'padoda-mtn-1gb');
+    return jsonResponse({ success: true, orderId: 'pado-1', status: 'processing' });
+  }, async () => {
+    const result = await dataProvider.purchaseData({
+      supplier: 'PadodaTagh',
+      reference: 'RABS-PRIMARY-1',
+      network: 'MTN',
+      providerPackageCode: 'padoda-mtn-1gb',
+      recipientPhone: '0240000000',
+      volumeInMB: 1000,
+      supplierCost: 4.25,
+    });
+    assert.equal(result.status, 'processing');
+    assert.equal(result.providerReference, 'pado-1');
+  });
+});
+
+test('retired RemaData requests are rejected before any network call', async () => {
+  let requests = 0;
+  await withFetch(async () => {
+    requests += 1;
+    throw new Error('No supplier call is permitted');
+  }, async () => {
+    await assert.rejects(
+      dataProvider.purchaseData({ supplier: 'RemaData', reference: 'RABS-RETIRED-1' }),
+      (error) => error.code === 'SUPPLIER_RETIRED' && error.notSent === true
+    );
+    await assert.rejects(
+      dataProvider.getAvailablePackages(undefined, 'RemaData'),
+      (error) => error.code === 'SUPPLIER_RETIRED'
+    );
+    await assert.rejects(
+      dataProvider.getProviderBalance('RemaData'),
+      (error) => error.code === 'SUPPLIER_RETIRED'
+    );
+  });
+  assert.equal(dataProvider.isDataProviderConfigured('RemaData'), false);
+  assert.equal(requests, 0);
+});
+
+test('missing historical supplier never submits or checks PadodaTagh', async () => {
+  let requests = 0;
+  await withFetch(async () => {
+    requests += 1;
+    throw new Error('No supplier call is permitted');
+  }, async () => {
+    await assert.rejects(
+      dataProvider.purchaseData({ reference: 'LEGACY-MISSING', network: 'MTN', providerPackageCode: 'slug', recipientPhone: '0240000000', volumeInMB: 1000 }),
+      (error) => error.code === 'SUPPLIER_RETIRED'
+    );
+    const status = await dataProvider.checkTransactionStatus({ reference: 'LEGACY-MISSING' });
+    assert.equal(status.status, 'uncertain');
+    assert.match(status.message, /no automatic status request/i);
+  });
+  assert.equal(requests, 0);
+});

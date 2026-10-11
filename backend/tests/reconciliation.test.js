@@ -5,7 +5,9 @@ import {
   classifyPaymentVerification,
   classifySupplierResult,
   findDuplicateLedgerEntries,
+  shouldAlertSupplierPending,
 } from '../services/reconciliationService.js';
+import { paymentReviewNotification, supplierPendingNotification } from '../services/adminNotificationEvents.js';
 import { canDebitWallet } from '../services/walletService.js';
 
 const successVerification = {
@@ -60,6 +62,20 @@ test('ambiguous supplier outcomes are routed to review instead of a duplicate pu
   assert.equal(classifySupplierResult({ order: processingOrder, result: uncertainResult }).action, 'review');
 });
 
+test('pending supplier alerts honor the configured threshold and create an order review link', () => {
+  const order = { _id: 'order-88', orderId: 'ORD-88', createdAt: new Date(0) };
+  assert.equal(shouldAlertSupplierPending({ order, now: 59_999, thresholdMs: 60_000 }), false);
+  assert.equal(shouldAlertSupplierPending({ order, now: 60_000, thresholdMs: 60_000 }), true);
+  assert.match(supplierPendingNotification(order).link, /open=order-88/);
+});
+
+test('payment reconciliation review alerts are deduplicable and avoid provider/customer details', () => {
+  const alert = paymentReviewNotification({ _id: 'payment-7', reference: 'PAY-7', order: null, contactPhone: '+233000000000' }, 'provider_state_unknown');
+  assert.equal(alert.eventId, 'payment-review:payment-7:provider_state_unknown');
+  assert.equal(alert.link, '/admin/transactions');
+  assert.equal(alert.message.includes('+233000000000'), false);
+});
+
 test('wallet debits are blocked when a concurrent request would overdraw the balance', () => {
   assert.equal(canDebitWallet({ balance: 50, amount: 45 }), true);
   assert.equal(canDebitWallet({ balance: 20, amount: 45 }), false);
@@ -84,5 +100,5 @@ test('reconciliation logic rejects amount or currency mismatches before applying
 
   const decision = classifyPaymentVerification({ payment, verification: mismatched });
   assert.equal(decision.action, 'review');
-  assert.equal(decision.reason, 'amount_or_currency_mismatch');
+  assert.equal(decision.reason, 'reference_amount_or_currency_mismatch');
 });

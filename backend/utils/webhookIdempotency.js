@@ -95,6 +95,22 @@ export const registerWebhookEvent = async ({
   }
 };
 
+export const claimWebhookEvent = async (eventHash, now = new Date()) => {
+  if (!eventHash) return null;
+  const staleBefore = new Date(now.getTime() - 5 * 60 * 1000);
+  return WebhookEvent.findOneAndUpdate(
+    {
+      eventHash,
+      $or: [
+        { status: { $in: ['received', 'retryable_failure'] } },
+        { status: 'processing', $or: [{ lastAttemptAt: null }, { lastAttemptAt: { $lte: staleBefore } }] },
+      ],
+    },
+    { $set: { status: 'processing', lastAttemptAt: now }, $inc: { attemptCount: 1 } },
+    { returnDocument: 'after' }
+  );
+};
+
 export const markWebhookEventProcessed = async (eventHash, updates = {}) => {
   if (!eventHash) return null;
 

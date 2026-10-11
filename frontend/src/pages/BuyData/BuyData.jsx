@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import useAsync from '../../hooks/useAsync.js';
 import { useBackendConnection } from '../../context/BackendConnectionContext.jsx';
@@ -37,6 +37,8 @@ export default function BuyData() {
   const [selectedId, setSelectedId] = useState(searchParams.get('package') || draft.package?._id || '');
   const [phone, setPhone] = useState(draft.recipientPhone || '');
   const [errors, setErrors] = useState({});
+  const [step, setStep] = useState('package');
+  const recipientSectionRef = useRef(null);
 
   const networks = data?.networks || [];
   const packages = data?.packages || [];
@@ -53,6 +55,12 @@ export default function BuyData() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
+  useEffect(() => {
+    if (step === 'recipient') {
+      recipientSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [step]);
+
   const handleNetwork = (code) => {
     setNetwork(code);
     if (selected && selected.network !== code) setSelectedId('');
@@ -61,11 +69,19 @@ export default function BuyData() {
 
   const handleContinue = (event) => {
     event.preventDefault();
+    if (step === 'package') {
+      const next = {};
+      if (!network) next.network = 'Choose a network';
+      else if (!selected) next.package = 'Choose a data bundle';
+      setErrors(next);
+      if (Object.keys(next).length) return;
+      setStep('recipient');
+      return;
+    }
+
     const next = {};
     const normalized = normalizePhone(phone);
 
-    if (!network) next.network = 'Choose a network';
-    else if (!selected) next.package = 'Choose a data bundle';
     if (!normalized) next.phone = 'Enter a valid Ghana phone number, e.g. 024 123 4567';
 
     setErrors(next);
@@ -89,54 +105,64 @@ export default function BuyData() {
 
       {data && networks.length > 0 && (
         <form onSubmit={handleContinue} noValidate className="buy__form">
-          <section className="buy__step card">
-            <h2 className="buy__step-title">
-              <span className="buy__num">1</span> Network
-            </h2>
-            <NetworkSelector networks={networks} value={network} onChange={handleNetwork} legend="Choose a network" />
-            {errors.network && (
-              <p className="field__error" role="alert">
-                {errors.network}
-              </p>
-            )}
-          </section>
+          {step === 'package' && (
+            <>
+              <section className="buy__step card">
+                <h2 className="buy__step-title">
+                  <span className="buy__num">1</span> Network
+                </h2>
+                <NetworkSelector networks={networks} value={network} onChange={handleNetwork} legend="Choose a network" />
+                {errors.network && (
+                  <p className="field__error" role="alert">
+                    {errors.network}
+                  </p>
+                )}
+              </section>
 
-          <section className="buy__step card" aria-live="polite">
-            <h2 className="buy__step-title">
-              <span className="buy__num">2</span> Data bundle
-            </h2>
-            {!network && <p className="muted">Choose a network first to see its bundles.</p>}
-            {network && visiblePackages.length === 0 && (
-              <EmptyState icon="package" title={`No ${network} bundles right now`} message="Try another network, or check back soon." />
-            )}
-            {network && visiblePackages.length > 0 && (
-              <div className="buy__packages" role="group" aria-label={`${network} data bundles`}>
-                {visiblePackages.map((pkg) => (
-                  <DataCard
-                    key={pkg._id}
-                    pkg={pkg}
-                    selected={pkg._id === selectedId}
-                    onSelect={(item) => {
-                      setSelectedId(item._id);
-                      setErrors((current) => ({ ...current, package: '' }));
-                    }}
-                  />
-                ))}
-              </div>
-            )}
-            {errors.package && (
-              <p className="field__error" role="alert">
-                {errors.package}
-              </p>
-            )}
-          </section>
+              <section className="buy__step card" aria-live="polite">
+                <h2 className="buy__step-title">
+                  <span className="buy__num">2</span> Data bundle
+                </h2>
+                {!network && <p className="muted">Choose a network first to see its bundles.</p>}
+                {network && visiblePackages.length === 0 && (
+                  <EmptyState icon="package" title={`No ${network} bundles right now`} message="Try another network, or check back soon." />
+                )}
+                {network && visiblePackages.length > 0 && (
+                  <div className="buy__packages" role="group" aria-label={`${network} data bundles`}>
+                    {visiblePackages.map((pkg) => (
+                      <DataCard
+                        key={pkg._id}
+                        pkg={pkg}
+                        selected={pkg._id === selectedId}
+                        onSelect={(item) => {
+                          setSelectedId(item._id);
+                          setErrors((current) => ({ ...current, package: '' }));
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+                {errors.package && (
+                  <p className="field__error" role="alert">
+                    {errors.package}
+                  </p>
+                )}
+              </section>
+            </>
+          )}
 
-          <section className="buy__step card">
-            <h2 className="buy__step-title">
-              <span className="buy__num">3</span> Recipient
-            </h2>
-            <PhoneInput value={phone} onChange={setPhone} error={errors.phone} network={network} />
-          </section>
+          {step === 'recipient' && (
+            <section ref={recipientSectionRef} className="buy__step card" aria-labelledby="buy-recipient-title">
+              <h2 id="buy-recipient-title" className="buy__step-title">
+                <span className="buy__num">3</span> Recipient
+              </h2>
+              {selected && <p className="muted">{selected.network} {selected.dataAmount} · {formatCurrency(selected.sellingPrice)}</p>}
+              <PhoneInput value={phone} onChange={setPhone} error={errors.phone} network={network} />
+              <button type="button" className="btn btn--ghost" onClick={() => setStep('package')}>
+                Back to bundles
+              </button>
+            </section>
+          )}
 
           <div className="buy__bar">
             <div className="buy__bar-info">
@@ -152,7 +178,7 @@ export default function BuyData() {
               )}
             </div>
             <button type="submit" className="btn btn--primary btn--lg">
-              Continue
+              {step === 'package' ? 'Continue' : 'Continue to checkout'}
             </button>
           </div>
         </form>

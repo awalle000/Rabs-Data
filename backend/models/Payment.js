@@ -10,11 +10,17 @@ const paymentSchema = new mongoose.Schema(
     purpose: { type: String, enum: ['order', 'wallet_funding'], required: true },
     amount: { type: Number, required: true, min: 0 },
     currency: { type: String, default: 'GHS' },
-    provider: { type: String, default: 'hubtel' },
+    provider: { type: String, enum: ['hubtel', 'paystack'] },
     providerReference: { type: String },
+    accessCode: { type: String },
     hubtelTransactionId: { type: String, index: true },
+    providerMetadata: { type: mongoose.Schema.Types.Mixed },
+    initializationState: { type: String, enum: ['created', 'in_progress', 'uncertain', 'ready'], default: 'created', index: true },
+    walletFundingActive: { type: Boolean, default: false },
     channel: { type: String },
     paymentGatewayFee: { type: Number, default: 0 },
+    paymentGatewayFeeKnown: { type: Boolean, default: false },
+    feePassedToCustomer: { type: Boolean },
     amountAfterCharges: { type: Number },
     status: {
       type: String,
@@ -30,5 +36,7 @@ const paymentSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+paymentSchema.index({ user: 1, walletFundingActive: 1 }, { unique: true, partialFilterExpression: { walletFundingActive: true } });
 
 export default mongoose.model('Payment', paymentSchema);

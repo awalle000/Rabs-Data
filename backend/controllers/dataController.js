@@ -1,23 +1,35 @@
 import DataPackage from '../models/DataPackage.js';
 import { getEnabledNetworks, getEnabledNetworkCodes } from '../config/networks.js';
+import { isEligiblePadodaPackage } from '../services/supplierCatalogService.js';
 import asyncHandler from '../utils/asyncHandler.js';
 
-export const getNetworks = asyncHandler(async (req, res) => {
+const CATALOG_FIELDS = '_id network name dataAmount validity bundleType restrictions sellingPrice volumeInMB providerCost providerPackageCode supplierOffers.padodatagh';
+
+const findEligiblePackages = async (filter) => {
+  const packages = await DataPackage.find(filter)
+    .select(CATALOG_FIELDS)
+    .sort({ network: 1, sellingPrice: 1 })
+    .lean();
+  return packages.filter((packageRecord) => isEligiblePadodaPackage(packageRecord));
+};
+
+const toPublicPackage = ({ providerCost, providerPackageCode, supplierOffers, __v, createdAt, updatedAt, ...packageRecord }) => packageRecord;
+
+const buildNetworkCounts = (eligiblePackages) => {
   const networks = getEnabledNetworks();
+  const countMap = new Map(networks.map(({ code }) => [code, 0]));
+  for (const packageRecord of eligiblePackages) {
+    countMap.set(packageRecord.network, (countMap.get(packageRecord.network) || 0) + 1);
+  }
+  return networks.map((network) => ({
+    ...network,
+    packageCount: countMap.get(network.code) || 0,
+  }));
+};
 
-  const counts = await DataPackage.aggregate([
-    { $match: { isActive: true, network: { $in: getEnabledNetworkCodes() } } },
-    { $group: { _id: '$network', count: { $sum: 1 } } },
-  ]);
-  const countMap = new Map(counts.map((item) => [item._id, item.count]));
-
-  res.json({
-    success: true,
-    networks: networks.map((network) => ({
-      ...network,
-      packageCount: countMap.get(network.code) || 0,
-    })),
-  });
+export const getNetworks = asyncHandler(async (req, res) => {
+  const eligiblePackages = await findEligiblePackages({ isActive: true, network: { $in: getEnabledNetworkCodes() } });
+  res.json({ success: true, networks: buildNetworkCounts(eligiblePackages) });
 });
 
 export const getPackages = asyncHandler(async (req, res) => {
@@ -28,12 +40,18 @@ export const getPackages = asyncHandler(async (req, res) => {
     filter.network = req.query.network;
   }
 
-  // .lean() skips virtuals, so "profit" is never included. providerCost is
-  // excluded explicitly. Customers can never see either.
-  const packages = await DataPackage.find(filter)
-    .select('-providerCost -providerPackageCode -__v -createdAt -updatedAt')
-    .sort({ network: 1, sellingPrice: 1 })
-    .lean();
+  const packages = (await findEligiblePackages(filter)).map(toPublicPackage);
 
   res.json({ success: true, count: packages.length, packages });
+});
+
+export const getCatalog = asyncHandler(async (req, res) => {
+  const eligiblePackages = await findEligiblePackages({ isActive: true, network: { $in: getEnabledNetworkCodes() } });
+  const packages = eligiblePackages.map(toPublicPackage);
+  res.json({
+    success: true,
+    networks: buildNetworkCounts(eligiblePackages),
+    count: packages.length,
+    packages,
+  });
 });

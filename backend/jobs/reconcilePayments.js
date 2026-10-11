@@ -11,12 +11,13 @@ const BATCH_SIZE = 20;
 let running = false;
 
 export const reconcilePendingPayments = async () => {
-  if (running || !isPaymentConfigured()) return;
+  if (running || (!isPaymentConfigured('paystack') && !isPaymentConfigured('hubtel'))) return;
   running = true;
 
   try {
     const now = Date.now();
     const due = await Payment.find({
+      provider: { $in: ['paystack', 'hubtel'] },
       status: { $in: ['initialized', 'pending'] },
       createdAt: {
         $lte: new Date(now - FIRST_CHECK_AFTER_MS),

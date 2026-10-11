@@ -4,9 +4,9 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import mongoose from 'mongoose';
 import env from './config/environment.js';
-import { apiLimiter } from './middleware/rateLimitMiddleware.js';
+import { apiLimiter, webhookLimiter } from './middleware/rateLimitMiddleware.js';
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
-import { handleDataProviderWebhook } from './webhooks/dataProviderWebhook.js';
+import { handlePadodaTaghWebhook } from './webhooks/padodataghWebhook.js';
 import authRoutes from './routes/authRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import dataRoutes from './routes/dataRoutes.js';
@@ -31,7 +31,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Order-Tracking-Token'],
 };
 
 app.use(helmet());
@@ -42,7 +42,7 @@ if (!env.isProduction) app.use(morgan('dev'));
 // Webhooks need the untouched raw body to verify signatures.
 // These must come BEFORE express.json().
 app.use('/api/payments/webhook', express.raw({ type: '*/*', limit: '100kb' }));
-app.use('/api/webhooks/data-provider', express.raw({ type: '*/*', limit: '100kb' }));
+app.use('/api/webhooks/padodatagh', express.raw({ type: '*/*', limit: '100kb' }));
 
 app.use(express.json({ limit: '10kb' }));
 
@@ -77,7 +77,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/analytics', analyticsRoutes);
-app.post('/api/webhooks/data-provider', handleDataProviderWebhook);
+app.post('/api/webhooks/padodatagh', webhookLimiter, handlePadodaTaghWebhook);
 
 app.use(notFound);
 app.use(errorHandler);

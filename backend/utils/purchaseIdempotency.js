@@ -1,16 +1,22 @@
 import crypto from 'node:crypto';
 import PurchaseOperation from '../models/PurchaseOperation.js';
 import AppError from './AppError.js';
+import { normalizePhone } from './validators.js';
 
 export const generatePurchaseIdempotencyKey = () =>
   crypto.randomBytes(18).toString('hex');
 
 const normalizeFingerprintValue = (value) => String(value ?? '').trim().toLowerCase();
+const scopeIdempotencyKey = (key, customerId) => crypto.createHash('sha256')
+  .update(`data_purchase\0${customerId ? String(customerId) : 'guest'}\0${key}`)
+  .digest('hex');
 
 export const fingerprintPurchaseRequest = ({
   customerId,
   packageId,
   recipientPhone,
+  network,
+  amount,
   contactPhone,
   contactEmail,
   paymentMethod,
@@ -18,8 +24,10 @@ export const fingerprintPurchaseRequest = ({
   const payload = {
     customerId: customerId ? String(customerId) : null,
     packageId: packageId ? String(packageId) : '',
-    recipientPhone: normalizeFingerprintValue(recipientPhone).replace(/\D+/g, ''),
-    contactPhone: normalizeFingerprintValue(contactPhone).replace(/\D+/g, ''),
+    network: normalizeFingerprintValue(network),
+    amount: amount == null || amount === '' ? null : Number(amount),
+    recipientPhone: normalizePhone(recipientPhone) || normalizeFingerprintValue(recipientPhone).replace(/\D+/g, ''),
+    contactPhone: normalizePhone(contactPhone) || normalizeFingerprintValue(contactPhone).replace(/\D+/g, ''),
     contactEmail: normalizeFingerprintValue(contactEmail),
     paymentMethod: paymentMethod || 'direct',
   };
@@ -28,83 +36,45 @@ export const fingerprintPurchaseRequest = ({
 };
 
 export const getPurchaseOperationState = async ({ key, customerId, payload }) => {
-  const normalizedKey = key || generatePurchaseIdempotencyKey();
+  const clientKey = key || generatePurchaseIdempotencyKey();
+  const normalizedKey = scopeIdempotencyKey(clientKey, customerId);
   const requestFingerprint = fingerprintPurchaseRequest({ ...payload, customerId });
+  let existing = await PurchaseOperation.findOne({ key: clientKey }).lean();
+  if (existing && String(existing.customer || '') !== String(customerId || '')) existing = null;
+  let isNew = false;
 
-  const existing = await PurchaseOperation.findOne({ key: normalizedKey }).lean();
-  if (!existing) {
-    try {
-      const claimed = await PurchaseOperation.findOneAndUpdate(
-        { key: normalizedKey, status: 'pending' },
-        {
-          $setOnInsert: {
-            key: normalizedKey,
-            customer: customerId || null,
-            kind: 'data_purchase',
-            requestFingerprint,
-            status: 'processing',
-            payloadSnapshot: payload,
-            expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7),
-          },
-          $set: {
-            customer: customerId || null,
-            requestFingerprint,
-            kind: 'data_purchase',
-            status: 'processing',
-            payloadSnapshot: payload,
-            updatedAt: new Date(),
-          },
-        },
-        {
-          upsert: true,
-          new: true,
-          setDefaultsOnInsert: true,
-        }
-      );
-
-      return {
+  try {
+    if (!existing) {
+      existing = await PurchaseOperation.create({
         key: normalizedKey,
+        customer: customerId || null,
+        kind: 'data_purchase',
         requestFingerprint,
-        operation: claimed,
-        isNew: true,
-        currentStatus: claimed?.status || 'processing',
-      };
-    } catch (error) {
-      if (error?.code !== 11000) throw error;
-      const duplicate = await PurchaseOperation.findOne({ key: normalizedKey }).lean();
-      if (!duplicate) throw error;
-
-      if (duplicate.customer && customerId && duplicate.customer.toString() !== customerId.toString()) {
-        throw new AppError('This purchase request is not available for this customer.', 409, 'IDEMPOTENCY_FORBIDDEN');
-      }
-
-      if (duplicate.requestFingerprint !== requestFingerprint) {
-        throw new AppError('This idempotency key was used for a different purchase request.', 409, 'IDEMPOTENCY_CONFLICT');
-      }
-
-      return {
-        key: normalizedKey,
-        requestFingerprint,
-        operation: duplicate,
-        isNew: false,
-        currentStatus: duplicate.status,
-      };
+        status: 'processing',
+        payloadSnapshot: payload,
+        expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7),
+      });
+      isNew = true;
     }
+  } catch (error) {
+    if (error?.code !== 11000) throw error;
+    existing = await PurchaseOperation.findOne({ key: normalizedKey }).lean();
+    if (!existing) throw error;
   }
 
-  if (existing.customer && customerId && existing.customer.toString() !== customerId.toString()) {
+  if (String(existing.customer || '') !== String(customerId || '')) {
     throw new AppError('This purchase request is not available for this customer.', 409, 'IDEMPOTENCY_FORBIDDEN');
   }
-
-  if (existing.requestFingerprint !== requestFingerprint) {
+  if (existing.kind !== 'data_purchase' || existing.requestFingerprint !== requestFingerprint) {
     throw new AppError('This idempotency key was used for a different purchase request.', 409, 'IDEMPOTENCY_CONFLICT');
   }
 
   return {
-    key: normalizedKey,
+    key: existing.key,
+    clientKey,
     requestFingerprint,
     operation: existing,
-    isNew: false,
+    isNew,
     currentStatus: existing.status,
   };
 };
@@ -113,7 +83,7 @@ export const markPurchaseOperationCreated = async ({ key, orderId, paymentRefere
   const normalizedKey = key || generatePurchaseIdempotencyKey();
 
   await PurchaseOperation.findOneAndUpdate(
-    { key: normalizedKey },
+    { key: normalizedKey, status: 'processing', order: null },
     {
       $set: {
         order: orderId || null,
@@ -123,7 +93,7 @@ export const markPurchaseOperationCreated = async ({ key, orderId, paymentRefere
         lastKnownState: { stage: 'order_created' },
       },
     },
-    { new: true }
+    { returnDocument: 'after' }
   );
 };
 
@@ -140,6 +110,6 @@ export const markPurchaseOperationCompleted = async ({ key, orderId, status = 'f
         lastKnownState: { stage: status },
       },
     },
-    { new: true }
+    { returnDocument: 'after' }
   );
 };

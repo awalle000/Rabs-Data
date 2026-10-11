@@ -14,12 +14,14 @@ const catalogSyncStateSchema = new mongoose.Schema(
     lastFinishedAt: { type: Date, default: null },
     lastSuccessfulAt: { type: Date, default: null },
     lastError: { type: String, default: '' },
+    failureStreak: { type: Number, default: 0 },
     summary: {
       added: { type: Number, default: 0 },
       updated: { type: Number, default: 0 },
       unavailable: { type: Number, default: 0 },
       deactivated: { type: Number, default: 0 },
       total: { type: Number, default: 0 },
+      costChanges: { type: [mongoose.Schema.Types.Mixed], default: [] },
     },
   },
   { timestamps: true }

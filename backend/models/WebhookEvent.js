@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 const webhookEventSchema = new mongoose.Schema(
   {
-    provider: { type: String, enum: ['hubtel', 'remadata'], required: true, index: true },
+    provider: { type: String, enum: ['hubtel', 'paystack', 'remadata', 'padodatagh'], required: true, index: true },
     providerEventId: { type: String, default: null, index: true },
     reference: { type: String, default: null, index: true },
     eventType: { type: String, default: 'unknown', index: true },

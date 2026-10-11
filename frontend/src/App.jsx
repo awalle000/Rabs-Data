@@ -23,6 +23,8 @@ import AdminPricing from './pages/AdminPricing/AdminPricing.jsx';
 import AdminTransactions from './pages/AdminTransactions/AdminTransactions.jsx';
 import AdminProfit from './pages/AdminProfit/AdminProfit.jsx';
 import AdminRegister from './pages/AdminRegister/AdminRegister.jsx';
+import AdminNotifications from './pages/AdminNotifications/AdminNotifications.jsx';
+import AdminSuppliers from './pages/AdminSuppliers/AdminSuppliers.jsx';
 import NotFound from './pages/NotFound/NotFound.jsx';
 import { useBackendConnection } from './context/BackendConnectionContext.jsx';
 import './App.css';
@@ -82,6 +84,8 @@ function App() {
             <Route path="packages" element={<AdminPackages />} />
             <Route path="pricing" element={<AdminPricing />} />
             <Route path="transactions" element={<AdminTransactions />} />
+            <Route path="notifications" element={<AdminNotifications />} />
+            <Route path="suppliers" element={<AdminSuppliers />} />
             <Route path="register" element={<AdminRegister />} />
             <Route path="profit" element={<AdminProfit />} />
             <Route path="*" element={<NotFound />} />

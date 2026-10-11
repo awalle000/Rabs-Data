@@ -1,0 +1,124 @@
+.admin-suppliers {
+  display: grid;
+  gap: 1rem;
+}
+
+.admin-suppliers__toolbar,
+.admin-suppliers__head,
+.admin-suppliers__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.admin-suppliers__toolbar p {
+  max-width: 52rem;
+  margin: 0;
+}
+
+.admin-suppliers__list {
+  display: grid;
+  gap: 1rem;
+}
+
+.admin-suppliers__item {
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.admin-suppliers__head {
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.admin-suppliers__head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.admin-suppliers__role {
+  margin: 0 0 0.15rem;
+  color: var(--color-primary-dark);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.admin-suppliers__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-weight: 700;
+}
+
+.admin-suppliers__toggle input {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--color-primary);
+}
+
+.admin-suppliers__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 0.8rem 1.25rem;
+  padding-block: 1rem;
+}
+
+.admin-suppliers__facts div {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.admin-suppliers__facts span {
+  color: var(--color-muted);
+  font-size: 0.8rem;
+}
+
+.admin-suppliers__facts strong {
+  overflow-wrap: anywhere;
+}
+
+.admin-suppliers__health--healthy { color: var(--color-primary-dark); }
+.admin-suppliers__health--degraded { color: var(--color-warning); }
+.admin-suppliers__health--unhealthy { color: var(--color-danger); }
+
+.admin-suppliers__error {
+  color: var(--color-danger);
+  overflow-wrap: anywhere;
+}
+
+.admin-suppliers__events {
+  margin-top: 0.8rem;
+  border-top: 1px solid var(--color-border);
+  padding-top: 0.8rem;
+}
+
+.admin-suppliers__events ul {
+  display: grid;
+  gap: 0.5rem;
+  padding-left: 1.2rem;
+}
+
+.admin-suppliers__events li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.admin-suppliers__events time {
+  color: var(--color-muted);
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .admin-suppliers__toolbar,
+  .admin-suppliers__events li {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

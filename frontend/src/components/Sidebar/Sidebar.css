@@ -24,11 +24,13 @@
 
 .sidebar__logo {
   display: block;
-  width: 90px;
-  height: 90px;
+  width: 156px;
+  height: 52px;
+  flex: 0 1 156px;
   object-fit: contain;
-  border-radius: 10px;
-  background: transparent;
+  border-radius: 8px;
+  padding: 3px 6px;
+  background: #fff;
 }
 
 .sidebar__brand-text {
@@ -51,6 +53,7 @@
 }
 
 .sidebar__link {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.7rem;
@@ -69,6 +72,17 @@
 .sidebar__link--active {
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
+}
+
+.sidebar__notification-count {
+  margin-left: auto;
+  min-width: 19px;
+  padding: 0.05rem 0.3rem;
+  border-radius: 10px;
+  background: #c62828;
+  color: white;
+  font-size: 0.68rem;
+  text-align: center;
 }
 
 .sidebar__footer {
@@ -117,5 +131,11 @@
     padding: 0.4rem;
     border-radius: 0;
     font-size: 0.7rem;
+  }
+
+  .sidebar__notification-count {
+    position: absolute;
+    margin: 0;
+    transform: translate(18px, -10px);
   }
 }

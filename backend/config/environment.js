@@ -51,12 +51,15 @@ const env = Object.freeze({
   walletEnabled: process.env.WALLET_ENABLED !== 'false',
   enabledNetworks: list(process.env.ENABLED_NETWORKS),
   allowPaymentsWithoutDelivery: process.env.ALLOW_PAYMENTS_WITHOUT_DELIVERY === 'true',
+  supplierPendingAlertAfterMs: Number(process.env.SUPPLIER_PENDING_ALERT_AFTER_MS) || 10 * 60 * 1000,
   gateway: {
     baseUrl: process.env.EXPLABS_BASE_URL || 'https://api.experientiallabs.ai/v1',
     apiKey: process.env.EXPLABS_API_KEY,
   },
   payment: {
-    provider: 'hubtel',
+    provider: 'paystack',
+    paystackSecretKey: process.env.PAYSTACK_SECRET_KEY || '',
+    paystackBaseUrl: trimSlash(process.env.PAYSTACK_BASE_URL || 'https://api.paystack.co'),
     apiId: process.env.HUBTEL_CLIENT_ID || process.env.HUBTEL_API_ID,
     apiKey: process.env.HUBTEL_CLIENT_SECRET || process.env.HUBTEL_API_KEY,
     merchantAccountNumber: process.env.HUBTEL_MERCHANT_ACCOUNT || process.env.HUBTEL_MERCHANT_ACCOUNT_NUMBER,
@@ -64,18 +67,15 @@ const env = Object.freeze({
     statusBaseUrl: trimSlash(process.env.HUBTEL_STATUS_BASE_URL || 'https://api-txnstatus.hubtel.com'),
     webhookToken: process.env.HUBTEL_WEBHOOK_TOKEN,
     passFeesToCustomer: process.env.HUBTEL_PASS_FEES_TO_CUSTOMER === 'true',
-    feePercentage: Number(process.env.HUBTEL_FEE_PERCENTAGE) || 1.95,
-    feeFixed: Number(process.env.HUBTEL_FEE_FIXED) || 0,
+    feePercentage: 0,
+    feeFixed: 0,
   },
-  dataProvider: {
-    baseUrl: process.env.REMADATA_BASE_URL || process.env.DATA_PROVIDER_BASE_URL || 'https://remadata.com/api',
-    apiKey: process.env.REMADATA_API_KEY || process.env.DATA_PROVIDER_API_KEY || '',
-    secret: process.env.DATA_PROVIDER_SECRET || '',
-  },
-  remadata: {
-    baseUrl: trimSlash(process.env.REMADATA_BASE_URL || process.env.DATA_PROVIDER_BASE_URL || 'https://remadata.com/api'),
-    apiKey: process.env.REMADATA_API_KEY || process.env.DATA_PROVIDER_API_KEY || '',
-    syncIntervalMs: Number(process.env.REMADATA_SYNC_INTERVAL_MS) || 300000,
+  padodatagh: {
+    baseUrl: trimSlash(process.env.PADODATAGH_BASE_URL || 'https://padodatagh.online/api/v1'),
+    apiKey: process.env.PADODATAGH_API_KEY || '',
+    webhookToken: process.env.PADODATAGH_WEBHOOK_TOKEN || '',
+    requestTimeoutMs: Number(process.env.PADODATAGH_REQUEST_TIMEOUT_MS) || 20000,
+    syncIntervalMs: Number(process.env.PADODATAGH_SYNC_INTERVAL_MS) || 900000,
   },
   email: {
     from: process.env.EMAIL_FROM || 'Rabs Data <noreply@rabsdata.com>',
