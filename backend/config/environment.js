@@ -75,6 +75,12 @@ const env = Object.freeze({
     apiKey: process.env.PADODATAGH_API_KEY || '',
     requestTimeoutMs: Number(process.env.PADODATAGH_REQUEST_TIMEOUT_MS) || 20000,
     syncIntervalMs: Number(process.env.PADODATAGH_SYNC_INTERVAL_MS) || 900000,
+    sms: {
+      enabled: process.env.PADODATAGH_SMS_ENABLED === 'true',
+      baseUrl: trimSlash(process.env.PADODATAGH_SMS_BASE_URL || process.env.PADODATAGH_BASE_URL || 'https://padodatagh.online/api/v1'),
+      apiKey: process.env.PADODATAGH_SMS_API_KEY || process.env.PADODATAGH_API_KEY || '',
+      requestTimeoutMs: Number(process.env.PADODATAGH_SMS_REQUEST_TIMEOUT_MS) || 10000,
+    },
   },
   email: {
     from: process.env.EMAIL_FROM || 'Rabs Data <noreply@rabsdata.com>',

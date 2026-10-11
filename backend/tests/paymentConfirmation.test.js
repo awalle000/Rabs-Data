@@ -4,12 +4,15 @@ import assert from 'node:assert/strict';
 process.env.MONGODB_URI ||= 'mongodb://localhost:27017/rabsdata-test';
 process.env.JWT_SECRET ||= 'test-secret';
 process.env.PAYSTACK_SECRET_KEY = 'mock-paystack-secret';
+process.env.PADODATAGH_SMS_ENABLED = 'true';
+process.env.PADODATAGH_SMS_API_KEY = 'mock-sms-key';
 
 const [
   { default: Payment },
   { default: Order },
   { default: Transaction },
   { default: AdminNotification },
+  { default: SmsNotification },
   paymentService,
   fulfillment,
 ] = await Promise.all([
@@ -17,19 +20,20 @@ const [
   import('../models/Order.js'),
   import('../models/Transaction.js'),
   import('../models/AdminNotification.js'),
+  import('../models/SmsNotification.js'),
   import('../services/paymentService.js'),
   import('../services/orderFulfillmentService.js'),
 ]);
 
 const makeHarness = ({ paymentOverrides = {}, verification, concurrent = false } = {}) => {
   const payment = {
-    _id: '64d9e76af742f8ab3f1e29a1', reference: 'DHP-ORDER-1', user: '64d9e76af742f8ab3f1e29a2', order: '64d9e76af742f8ab3f1e29a3', purpose: 'order',
+    _id: '64d9e76af742f8ab3f1e29a1', reference: 'DHP-ORDER-1', user: '64d9e76af742f8ab3f1e29a2', order: '64d9e76af742f8ab3f1e29a3', purpose: 'order', contactPhone: '0240000000',
     provider: 'paystack', amount: 12.34, currency: 'GHS', contactEmail: 'buyer@example.com',
     providerMetadata: { rabsPaymentReference: 'DHP-ORDER-1', rabsPurpose: 'order', rabsOrderId: '64d9e76af742f8ab3f1e29a3', rabsUserId: '64d9e76af742f8ab3f1e29a2' },
     paymentGatewayFee: 0, status: 'pending', ...paymentOverrides,
   };
   const order = {
-    _id: '64d9e76af742f8ab3f1e29a3', orderId: 'DH-1', customer: '64d9e76af742f8ab3f1e29a2', paymentReference: payment.reference,
+    _id: '64d9e76af742f8ab3f1e29a3', orderId: 'DH-1', customer: '64d9e76af742f8ab3f1e29a2', paymentReference: payment.reference, contactPhone: '0240000000',
     paymentMethod: 'direct', status: 'payment_pending', paymentStatus: 'pending', sellingPrice: 12.34,
     baseProductPrice: 12.34, supplierCost: 5, providerCost: 5, netProfit: 7.34,
     supplier: undefined, supplierSubmitted: false,
@@ -47,8 +51,10 @@ const makeHarness = ({ paymentOverrides = {}, verification, concurrent = false }
     transactionUpdateOne: Transaction.updateOne,
     transactionCreate: Transaction.create,
     notificationCreate: AdminNotification.create,
+    smsNotificationCreate: SmsNotification.create,
   };
   let paidTransitions = 0;
+  const smsEvents = new Map();
 
   Payment.findOne = async ({ reference }) => reference === payment.reference ? { ...payment } : null;
   Payment.findById = async () => ({ ...payment });
@@ -79,13 +85,18 @@ const makeHarness = ({ paymentOverrides = {}, verification, concurrent = false }
   };
   Transaction.create = async (entry) => { ledger.set(entry.operationKey || `entry-${ledger.size}`, entry); return entry; };
   AdminNotification.create = async (entry) => entry;
+  SmsNotification.create = async (entry) => {
+    if (smsEvents.has(entry.eventKey)) throw Object.assign(new Error('duplicate key'), { code: 11000 });
+    smsEvents.set(entry.eventKey, entry);
+    return entry;
+  };
   paymentService.setMockPaystackVerifier(async (reference, options) => {
     assert.equal(reference, payment.reference);
     assert.ok(options.payment);
     return typeof verification === 'function' ? verification(payment) : verification;
   });
   return {
-    payment, order, ledger,
+    payment, order, ledger, smsEvents,
     counts: () => ({ paidTransitions }),
     async restore() {
       Payment.findOne = originals.paymentFindOne;
@@ -99,6 +110,7 @@ const makeHarness = ({ paymentOverrides = {}, verification, concurrent = false }
       Transaction.updateOne = originals.transactionUpdateOne;
       Transaction.create = originals.transactionCreate;
       AdminNotification.create = originals.notificationCreate;
+      SmsNotification.create = originals.smsNotificationCreate;
       paymentService.setMockPaystackVerifier(null);
     },
   };
@@ -133,6 +145,7 @@ test('verified Paystack success conditionally applies payment and fulfillment on
     assert.equal(harness.counts().paidTransitions, 1);
     assert.equal(harness.order.supplierSubmitted, false);
     assert.equal(harness.ledger.size, 1);
+    assert.equal(harness.smsEvents.has(`payment-confirmed:${harness.payment._id}`), true);
   } finally {
     await harness.restore();
   }

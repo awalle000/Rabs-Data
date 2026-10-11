@@ -1,0 +1,13 @@
+# PadodaTagh Transactional SMS
+
+SMS is disabled unless `PADODATAGH_SMS_ENABLED=true` is set in the backend environment. Configure `PADODATAGH_SMS_API_KEY` with the SMS credential on Render; if the provider supplied no separate SMS key, the service can use the existing backend-only `PADODATAGH_API_KEY`. Never add either key to the frontend.
+
+The implementation follows the published [SMS guidelines](https://padodatagh.online/developer-settings/sms-guidelines): `POST /api/v1/sms`, `Authorization: Bearer <key>`, JSON `{ "recipients": "0241234567", "message": "..." }`. A request is recorded as accepted only for HTTP success plus `success: true`, `data.status: "dispatched"`, a provider reference, one recipient, and valid cost/page fields. Any other response is `unknown` because the API documentation does not describe its error schema. The documented sender is `PadoPortal`; the API documentation does not describe a sender override, delivery receipt, or idempotency parameter.
+
+The service validates Ghanaian destination numbers and GSM-7 content. It rejects unsupported characters and messages over three billable pages, estimates GH₵0.10 per page, and stores the provider-reported cost and pages. Calls are serialized across backend instances using a MongoDB rate gate with a minimum 3.1-second interval, below the documented 20 requests/minute and one-recipient-per-request limits.
+
+Payment notifications are queued only after payment-provider verification and stored amount/reference/currency checks. Delivery notices require the PadodaTagh status check to confirm the supplier order and the order transition to `successful`. Confirmed failures receive a neutral support message. SMS processing never controls payment, order, refund, or supplier state.
+
+`SmsNotification` uses a unique event key so repeated callbacks and reconciliation runs cannot queue the same event twice. A queued event can be retried after a worker/database failure that occurred before the provider request. The API documentation offers no idempotency key, so a timeout or worker crash during a provider request is marked `unknown` and is not resent automatically; this prevents duplicate customer messages. `accepted` means the API reported `dispatched`, not that a handset received the SMS. There is no delivery receipt in the documented API.
+
+Admins can inspect masked status records at `GET /api/admin/sms-notifications` (optional `status` and `limit` query parameters). Message bodies and full phone numbers are not returned. Keep `PADODATAGH_SMS_ENABLED=false` in development, test, and preview environments. Automated tests use stubbed persistence and mocked HTTP responses and do not start the SMS worker.

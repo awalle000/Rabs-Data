@@ -5,6 +5,7 @@ import { startPaymentReconciliation } from './jobs/reconcilePayments.js';
 import { startSupplierReconciliation } from './jobs/reconcileSupplierOrders.js';
 import { startSupplierCatalogScheduler } from './services/supplierCatalogService.js';
 import { startLedgerAudit } from './jobs/auditLedger.js';
+import { startSmsDispatcher } from './services/smsNotificationService.js';
 
 const start = async () => {
   try {
@@ -24,6 +25,7 @@ const start = async () => {
   startSupplierReconciliation();
   startSupplierCatalogScheduler();
   startLedgerAudit();
+  startSmsDispatcher();
 };
 
 process.on('unhandledRejection', (reason) => {

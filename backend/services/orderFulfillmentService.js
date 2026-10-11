@@ -14,6 +14,12 @@ import { isExplicitPadodaTaghOrder } from '../utils/supplierPolicies.js';
 import { calculateProfits } from '../utils/paymentFees.js';
 import { notifyAdminsSafely } from './adminNotificationService.js';
 import {
+  queueOrderDeliveredSms,
+  queueOrderFailedSms,
+  queuePaymentConfirmedSms,
+  queuePaymentFailedSms,
+} from './smsNotificationService.js';
+import {
   paymentMismatchNotification,
   supplierFailureNotification,
   supplierUncertainNotification,
@@ -213,6 +219,7 @@ export const applyProviderResult = async (order, result) => {
     if (updated) {
       await syncPurchaseOperationState(updated, 'fulfilled');
       await recordProviderTransaction(updated, 'successful', supplierRef, `Data delivered for ${updated.orderId}`);
+      await queueOrderDeliveredSms(updated);
       return updated;
     }
     return Order.findById(order._id);
@@ -242,6 +249,7 @@ export const applyProviderResult = async (order, result) => {
     await notifyAdminsSafely(supplierFailureNotification(failed));
     await syncPurchaseOperationState(failed, 'failed');
     await recordProviderTransaction(failed, 'failed', supplierRef, result.message || 'Provider reported failure');
+    await queueOrderFailedSms(failed);
     return failed;
   }
 
@@ -302,6 +310,7 @@ const submitPersistedOrder = async (order) => {
       const failed = await failOrder(order, 'Data delivery is temporarily unavailable. Please contact support.');
       await notifyAdminsSafely(supplierFailureNotification(order));
       await notifyOrderUpdate(failed);
+      await queueOrderFailedSms(failed);
       return failed;
     }
 
@@ -397,6 +406,9 @@ export const processPaymentReference = async (reference, webhookHint = null) => 
       }
       if (order && order.paymentReference === payment.reference) {
         await recordOrderPaymentLedger(payment, order);
+        if (['paid', 'processing', 'successful'].includes(order.status)) {
+          await queuePaymentConfirmedSms(payment, order);
+        }
         if (order.status === 'paid') await fulfillOrder(payment.order);
       }
     }
@@ -471,10 +483,12 @@ export const processPaymentReference = async (reference, webhookHint = null) => 
       { returnDocument: 'after' }
     );
     if (failed && failed.purpose === 'order') {
-      await Order.updateOne(
+      const failedOrder = await Order.findOneAndUpdate(
         { _id: failed.order, status: { $in: ['pending', 'payment_pending'] } },
-        { $set: { status: 'failed', paymentStatus: 'failed', failureReason: 'Payment failed' } }
+        { $set: { status: 'failed', paymentStatus: 'failed', failureReason: 'Payment failed' } },
+        { returnDocument: 'after' }
       );
+      if (failedOrder) await queuePaymentFailedSms(failed, failedOrder);
     }
     return failed || payment;
   }
@@ -588,6 +602,8 @@ export const processPaymentReference = async (reference, webhookHint = null) => 
     });
     return confirmed;
   }
+
+  await queuePaymentConfirmedSms(confirmed, paidOrder);
 
   await recordOrderPaymentLedger(confirmed, paidOrder);
   await fulfillOrder(paidOrder._id);

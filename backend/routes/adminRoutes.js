@@ -28,6 +28,7 @@ import {
   streamAdminNotifications,
   updateAdminNotification,
 } from '../controllers/adminNotificationController.js';
+import { listAdminSmsNotifications } from '../controllers/adminSmsController.js';
 import {
   mongoIdParam,
   orderIdParam,
@@ -45,6 +46,7 @@ router.use(protect, adminOnly);
 
 router.get('/notifications/stream', streamAdminNotifications);
 router.get('/notifications', listAdminNotifications);
+router.get('/sms-notifications', listAdminSmsNotifications);
 router.patch('/notifications/read-all', markAllAdminNotificationsRead);
 router.patch('/notifications/:id', updateAdminNotification);
 

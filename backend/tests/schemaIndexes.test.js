@@ -7,9 +7,11 @@ process.env.JWT_SECRET = 'test-only-not-a-secret';
 const [
   { default: Order },
   { default: PurchaseOperation },
+  { default: SmsNotification },
 ] = await Promise.all([
   import('../models/Order.js'),
   import('../models/PurchaseOperation.js'),
+  import('../models/SmsNotification.js'),
 ]);
 
 const indexesFor = (schema, key) => schema.indexes().filter(([keys]) => Object.hasOwn(keys, key));
@@ -35,4 +37,10 @@ test('PurchaseOperation key has one globally unique index and expiresAt is not a
   const expiryIndexes = indexesFor(PurchaseOperation.schema, 'expiresAt');
   assert.deepEqual(expiryIndexes, [[{ expiresAt: 1 }, {}]]);
   assert.equal(PurchaseOperation.schema.path('expiresAt').options.expireAfterSeconds, undefined);
+});
+
+test('SMS event key is unique and private message fields are excluded by default', () => {
+  assert.deepEqual(indexesFor(SmsNotification.schema, 'eventKey'), [[{ eventKey: 1 }, { unique: true }]]);
+  assert.equal(SmsNotification.schema.path('phone').options.select, false);
+  assert.equal(SmsNotification.schema.path('message').options.select, false);
 });
