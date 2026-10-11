@@ -29,8 +29,8 @@ export default function Checkout() {
   const [created, setCreated] = useState(null); // { order, token, idempotencyKey }
 
   useEffect(() => {
-    if (!pkg || !draft.recipientPhone) navigate('/buy', { replace: true });
-  }, [pkg, draft.recipientPhone, navigate]);
+    if (!pkg || !draft?.recipientPhone) navigate('/buy', { replace: true });
+  }, [pkg, draft?.recipientPhone, navigate]);
 
   // Wallet balance is only fetched for logged-in customers.
   const wallet = useAsync(
@@ -57,7 +57,7 @@ export default function Checkout() {
   const estimatedFee = 0;
   const finalPayable = basePrice;
 
-  if (!pkg || !draft.recipientPhone) return null;
+  if (!pkg || !draft?.recipientPhone) return null;
 
   const handlePay = async () => {
     setError(null);
@@ -100,6 +100,9 @@ export default function Checkout() {
           contactEmail: trimmedEmail || undefined,
           idempotencyKey,
         });
+        if (!response?.order) {
+          throw new Error('The order could not be created. Please try again.');
+        }
         current = { order: response.order, token: response.trackingToken || null, idempotencyKey: response.idempotencyKey || idempotencyKey };
         setCreated(current);
 
@@ -111,6 +114,10 @@ export default function Checkout() {
             label: `${pkg.network} ${pkg.dataAmount}`,
           });
         }
+      }
+
+      if (!current?.order?._id) {
+        throw new Error('The order reference is missing. Please try again.');
       }
 
       const successUrl = `/order-success?orderId=${current.order._id}`;
@@ -142,7 +149,7 @@ export default function Checkout() {
     }
   };
 
-  const orderLink = created ? `/order-success?orderId=${created.order._id}` : null;
+  const orderLink = created?.order?._id ? `/order-success?orderId=${created.order._id}` : null;
 
   return (
     <div className="container page checkout">
