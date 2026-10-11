@@ -1,5 +1,11 @@
 export const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(value || '').trim());
 
+export const validateCheckoutEmail = (value) => {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+  return isValidEmail(trimmed) ? '' : 'Enter a valid email address.';
+};
+
 export const validateName = (value) => {
   const name = String(value || '').trim();
   if (name.length < 2) return 'Enter your full name';

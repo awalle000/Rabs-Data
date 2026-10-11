@@ -206,6 +206,33 @@ test('authenticated account-owned order persists the same order owner', async ()
   }
 });
 
+test('Paystack initialization reuses the authenticated customer email when the order email is blank', async () => {
+  const harness = makeHarness();
+  harness.order.contactEmail = '';
+  try {
+    const result = await invoke();
+    const payment = [...harness.payments.values()][0];
+    assert.equal(result.statusCode, 201);
+    assert.equal(payment.contactEmail, 'buyer@example.com');
+  } finally {
+    await harness.restore();
+  }
+});
+
+test('Paystack initialization rejects a missing email when no customer email is available', async () => {
+  const harness = makeHarness({ customer: null });
+  harness.order.contactEmail = '';
+  try {
+    await assert.rejects(
+      () => invoke({ authenticated: false, trackingToken: 'valid-tracking-token' }),
+      (error) => error && error.code === 'PAYMENT_EMAIL_REQUIRED'
+    );
+    assert.equal(harness.payments.size, 0);
+  } finally {
+    await harness.restore();
+  }
+});
+
 test('genuine guest order remains unassociated with an account', async () => {
   const harness = makeHarness({ customer: null });
   try {

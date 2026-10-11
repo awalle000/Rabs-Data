@@ -8,7 +8,7 @@ import * as orderService from '../../services/orderService.js';
 import * as paymentService from '../../services/paymentService.js';
 import { saveGuestOrder } from '../../utils/guestOrders.js';
 import { formatCurrency } from '../../utils/formatCurrency.js';
-import { isValidEmail } from '../../utils/validators.js';
+import { validateCheckoutEmail } from '../../utils/validators.js';
 import { getErrorCode, getErrorMessage } from '../../utils/errors.js';
 import { clearCheckoutIdempotencyKey, getCheckoutIdempotencyKey } from '../../utils/checkoutIdempotency.js';
 import OrderSummary from '../../components/OrderSummary/OrderSummary.jsx';
@@ -73,17 +73,15 @@ export default function Checkout() {
       });
       return;
     }
-    if (method === 'direct' && !email) {
-      setError({ message: 'Enter an email address to continue to payment.' });
-      return;
-    }
-    if (email && !isValidEmail(email)) {
-      setError({ message: 'Enter a valid email address.' });
+    const checkoutEmailError = validateCheckoutEmail(email);
+    if (checkoutEmailError) {
+      setError({ message: checkoutEmailError });
       return;
     }
 
     setSubmitting(true);
     try {
+      const trimmedEmail = email.trim();
       // Step 1: create the order once. A retry only repeats the payment step.
       let current = created;
       if (!current) {
@@ -92,14 +90,14 @@ export default function Checkout() {
           network: pkg.network,
           recipientPhone: draft.recipientPhone,
           paymentMethod: method,
-          contactEmail: email,
+          contactEmail: trimmedEmail,
           userId: user?._id,
         });
         const response = await orderService.createOrder({
           packageId: pkg._id,
           recipientPhone: draft.recipientPhone,
           paymentMethod: method,
-          contactEmail: email || undefined,
+          contactEmail: trimmedEmail || undefined,
           idempotencyKey,
         });
         current = { order: response.order, token: response.trackingToken || null, idempotencyKey: response.idempotencyKey || idempotencyKey };
@@ -216,7 +214,7 @@ export default function Checkout() {
           {method === 'direct' && (
             <div className="field">
               <label className="field__label" htmlFor="email">
-                Email for payment and receipt
+                Email Address (Optional)
               </label>
               <input
                 id="email"
@@ -226,6 +224,7 @@ export default function Checkout() {
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 disabled={Boolean(created)}
+                placeholder="Optional"
               />
             </div>
           )}
