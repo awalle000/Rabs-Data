@@ -28,10 +28,19 @@ function getTransporter() {
     !pass && 'SMTP_PASS',
     !env.email.from && 'EMAIL_FROM',
   ].filter(Boolean);
+  const variablesWithWhitespace = [
+    host && host !== host.trim() && 'SMTP_HOST',
+    user && user !== user.trim() && 'SMTP_USER',
+    pass && pass !== pass.trim() && 'SMTP_PASS',
+    env.email.from && env.email.from !== env.email.from.trim() && 'EMAIL_FROM',
+  ].filter(Boolean);
   if (missingVariables.length) {
-    console.warn('[EmailService] SMTP configuration is incomplete.', {
+    console.error('[EmailService] SMTP startup verification failed.', {
       provider: env.email.provider,
+      stage: 'configuration',
+      code: 'SMTP_CONFIGURATION_INCOMPLETE',
       missingVariables,
+      variablesWithWhitespace,
     });
     return null;
   }
@@ -39,6 +48,7 @@ function getTransporter() {
   const senderAddress = env.email.from.match(/<([^>]+)>/)?.[1] || env.email.from;
   const senderMatchesAuthenticatedAccount = senderAddress.trim().toLowerCase() === user.trim().toLowerCase();
   const smtpUserLooksLikeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user);
+  const emailFromConfigured = Boolean(env.email.from);
   const gmailTlsShapeValid = host.toLowerCase() !== 'smtp.gmail.com'
     || (port === 465 && secure === true)
     || (port === 587 && secure === false);
@@ -48,6 +58,8 @@ function getTransporter() {
     port,
     secure,
     credentialsConfigured: true,
+    emailFromConfigured,
+    variablesWithWhitespace,
     smtpUserLooksLikeEmail,
     senderMatchesAuthenticatedAccount,
     gmailTlsShapeValid,
@@ -104,10 +116,24 @@ export const sendSmtpMail = (mailer, message, timeoutMs = smtpSendTimeoutMs) =>
   runSmtpOperation(mailer, () => mailer.sendMail(message), timeoutMs, 'OVERALL_SEND');
 
 export const verifySmtpTransport = async () => {
-  if (env.email.provider !== 'smtp') return { outcome: 'skipped' };
+  console.info('[EmailService] Startup email provider selected.', { provider: env.email.provider });
+  if (env.email.provider !== 'smtp') {
+    console.warn('[EmailService] SMTP startup verification skipped because a non-SMTP provider is selected.', {
+      provider: env.email.provider,
+      code: 'SMTP_VERIFICATION_SKIPPED',
+    });
+    return { outcome: 'skipped' };
+  }
   try {
     const mailer = getTransporter();
-    if (!mailer) return { outcome: 'failed', code: 'SMTP_CONFIGURATION_INCOMPLETE' };
+    if (!mailer) {
+      console.error('[EmailService] SMTP startup verification failed.', {
+        provider: 'smtp',
+        stage: 'configuration',
+        code: 'SMTP_CONFIGURATION_INVALID',
+      });
+      return { outcome: 'failed', code: 'SMTP_CONFIGURATION_INVALID' };
+    }
     await runSmtpOperation(mailer, () => mailer.verify(), smtpSendTimeoutMs, 'OVERALL_VERIFY');
     console.info('[EmailService] SMTP transport verification succeeded.', { provider: 'smtp' });
     return { outcome: 'verified' };

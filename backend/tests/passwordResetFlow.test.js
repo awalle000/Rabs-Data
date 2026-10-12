@@ -305,6 +305,25 @@ test('SMTP transport has bounded connect, greeting, and socket timeouts', () => 
   });
 });
 
+test('startup explicitly reports SMTP verification skipped for a non-SMTP provider', async (t) => {
+  const originalProvider = env.email.provider;
+  const originalInfo = console.info;
+  const originalWarn = console.warn;
+  const logs = [];
+  env.email.provider = 'resend';
+  console.info = (...args) => logs.push(args);
+  console.warn = (...args) => logs.push(args);
+  t.after(() => {
+    env.email.provider = originalProvider;
+    console.info = originalInfo;
+    console.warn = originalWarn;
+  });
+
+  assert.deepEqual(await verifySmtpTransport(), { outcome: 'skipped' });
+  assert.equal(logs[0][1].provider, 'resend');
+  assert.equal(logs[1][1].code, 'SMTP_VERIFICATION_SKIPPED');
+});
+
 test('Gmail SMTP transport uses implicit TLS and reports Nodemailer delivery counts', async (t) => {
   const original = {
     provider: env.email.provider,

@@ -99,7 +99,7 @@ const env = Object.freeze({
     },
   },
   email: {
-    provider: process.env.EMAIL_PROVIDER || 'smtp',
+    provider: (process.env.EMAIL_PROVIDER || 'smtp').trim().toLowerCase(),
     from: process.env.EMAIL_FROM || 'Rabs Data <noreply@rabsdata.com>',
     resendApiKey: process.env.RESEND_API_KEY || '',
     smtp: {
