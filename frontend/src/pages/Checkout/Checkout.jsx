@@ -29,6 +29,10 @@ export default function Checkout() {
   const [created, setCreated] = useState(null); // { order, token, idempotencyKey }
 
   useEffect(() => {
+    setEmail(user?.email || '');
+  }, [user?.email]);
+
+  useEffect(() => {
     if (!pkg || !draft?.recipientPhone) navigate('/buy', { replace: true });
   }, [pkg, draft?.recipientPhone, navigate]);
 
@@ -231,8 +235,9 @@ export default function Checkout() {
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 disabled={Boolean(created)}
-                placeholder="Optional"
+                placeholder={user?.email || 'Optional'}
               />
+              {!user?.email && <small>Paystack receipts use Rabs Data's payment email if this is left blank.</small>}
             </div>
           )}
 

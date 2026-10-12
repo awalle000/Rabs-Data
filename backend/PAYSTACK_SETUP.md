@@ -5,6 +5,7 @@
 Set these in the backend's Render environment, not in Vercel or any `VITE_*` variable:
 
 - `PAYSTACK_SECRET_KEY`: the secret key for the Paystack mode selected in the dashboard. Keep it private; the backend uses it for initialization, verification, and webhook signatures.
+- `PAYSTACK_GUEST_EMAIL`: a real, monitored business email address for guests who leave the checkout email blank. Paystack requires an email and sends its receipt to this address; customers who enter an email use their own instead.
 - `API_PUBLIC_URL`: the public HTTPS base URL of the deployed backend, without a trailing slash. This is used to construct the webhook URL.
 - `CLIENT_URL`: the deployed frontend origin (or comma-separated allowed origins where the environment supports multiple frontend URLs).
 - `MONGODB_URI`: the existing MongoDB connection string; payment references and pending state are persisted there before contacting Paystack.

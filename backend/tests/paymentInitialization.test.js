@@ -6,9 +6,11 @@ process.env.JWT_SECRET ||= 'test-secret';
 process.env.PAYSTACK_SECRET_KEY = 'mock-paystack-secret';
 process.env.PADODATAGH_API_KEY = 'mock-padoda-key';
 
-const [{ default: Order }, { default: Payment }, { initializePayment }] = await Promise.all([
+const [{ default: Order }, { default: Payment }, { default: User }, { default: env }, { initializePayment }] = await Promise.all([
   import('../models/Order.js'),
   import('../models/Payment.js'),
+  import('../models/User.js'),
+  import('../config/environment.js'),
   import('../controllers/paymentController.js'),
 ]);
 
@@ -45,6 +47,7 @@ const makeHarness = ({ failPaymentCreate = false, gatewayTimeout = false, custom
     paymentFindOne: Payment.findOne,
     paymentCreate: Payment.create,
     paymentUpdateOne: Payment.updateOne,
+    userFindById: User.findById,
     fetch: globalThis.fetch,
   };
   let createAttempts = 0;
@@ -77,6 +80,7 @@ const makeHarness = ({ failPaymentCreate = false, gatewayTimeout = false, custom
     if (payment) Object.assign(payment, update.$set);
     return { modifiedCount: payment ? 1 : 0 };
   };
+  User.findById = () => ({ select: async () => ({ email: 'buyer@example.com' }) });
   globalThis.fetch = async (url, options) => {
     gatewayRequests += 1;
     if (gatewayTimeout) throw new TypeError('simulated timeout');
@@ -98,6 +102,7 @@ const makeHarness = ({ failPaymentCreate = false, gatewayTimeout = false, custom
       Payment.findOne = originals.paymentFindOne;
       Payment.create = originals.paymentCreate;
       Payment.updateOne = originals.paymentUpdateOne;
+      User.findById = originals.userFindById;
       globalThis.fetch = originals.fetch;
     },
   };
@@ -219,9 +224,24 @@ test('Paystack initialization reuses the authenticated customer email when the o
   }
 });
 
+test('token-authorized account order uses the saved customer email when the order email is blank', async () => {
+  const harness = makeHarness();
+  harness.order.contactEmail = '';
+  try {
+    const result = await invoke({ authenticated: false, trackingToken: 'valid-tracking-token' });
+    const payment = [...harness.payments.values()][0];
+    assert.equal(result.statusCode, 201);
+    assert.equal(payment.contactEmail, 'buyer@example.com');
+  } finally {
+    await harness.restore();
+  }
+});
+
 test('Paystack initialization rejects a missing email when no customer email is available', async () => {
   const harness = makeHarness({ customer: null });
   harness.order.contactEmail = '';
+  const originalGuestEmail = env.payment.guestEmail;
+  env.payment.guestEmail = '';
   try {
     await assert.rejects(
       () => invoke({ authenticated: false, trackingToken: 'valid-tracking-token' }),
@@ -229,6 +249,23 @@ test('Paystack initialization rejects a missing email when no customer email is 
     );
     assert.equal(harness.payments.size, 0);
   } finally {
+    env.payment.guestEmail = originalGuestEmail;
+    await harness.restore();
+  }
+});
+
+test('guest payment uses the configured Paystack email when checkout email is blank', async () => {
+  const harness = makeHarness({ customer: null });
+  harness.order.contactEmail = '';
+  const originalGuestEmail = env.payment.guestEmail;
+  env.payment.guestEmail = 'payments@example.com';
+  try {
+    const result = await invoke({ authenticated: false, trackingToken: 'valid-tracking-token' });
+    const payment = [...harness.payments.values()][0];
+    assert.equal(result.statusCode, 201);
+    assert.equal(payment.contactEmail, 'payments@example.com');
+  } finally {
+    env.payment.guestEmail = originalGuestEmail;
     await harness.restore();
   }
 });

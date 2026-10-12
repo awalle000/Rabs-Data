@@ -62,6 +62,7 @@ const env = Object.freeze({
   payment: {
     provider: 'paystack',
     paystackSecretKey: process.env.PAYSTACK_SECRET_KEY || '',
+    guestEmail: process.env.PAYSTACK_GUEST_EMAIL || '',
     paystackBaseUrl: trimSlash(process.env.PAYSTACK_BASE_URL || 'https://api.paystack.co'),
     apiId: process.env.HUBTEL_CLIENT_ID || process.env.HUBTEL_API_ID,
     apiKey: process.env.HUBTEL_CLIENT_SECRET || process.env.HUBTEL_API_KEY,

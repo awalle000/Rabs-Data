@@ -1,5 +1,6 @@
 import Order from '../models/Order.js';
 import Payment from '../models/Payment.js';
+import User from '../models/User.js';
 import env from '../config/environment.js';
 import * as paymentService from '../services/paymentService.js';
 import { isDataProviderConfigured } from '../services/dataProviderService.js';
@@ -127,8 +128,11 @@ export const initializePayment = asyncHandler(async (req, res) => {
   const payableAmount = order.customerChargedAmount || order.sellingPrice;
   paymentService.toPesewas(payableAmount);
   const pageUrl = `${env.clientUrl}/order-success?orderId=${order._id}`;
-  const email = String(order.contactEmail || req.user?.email || '').trim().toLowerCase();
-  if (!email) throw new AppError('A valid email address is required to start a payment.', 400, 'PAYMENT_EMAIL_REQUIRED');
+  const account = !order.contactEmail && !req.user?.email && order.customer
+    ? await User.findById(order.customer).select('email')
+    : null;
+  const email = String(order.contactEmail || req.user?.email || account?.email || env.payment.guestEmail || '').trim().toLowerCase();
+  if (!email) throw new AppError('Guest payments require a configured Paystack payment email.', 503, 'PAYMENT_EMAIL_REQUIRED');
   let reference = order.paymentReference;
   let payment;
 
