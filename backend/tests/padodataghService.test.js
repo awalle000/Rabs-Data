@@ -182,6 +182,43 @@ test('only a documented HTTP rejection with a parsed explicit failure is classif
   });
 });
 
+test('ambiguous purchase 404 captures safe request metadata and redacts supplier response content', async () => {
+  await withFetch(async (url, options) => {
+    assert.equal(url, 'https://padodatagh.test/api/v1/order/mtn');
+    assert.equal(options.method, 'POST');
+    return jsonResponse({
+      success: false,
+      message: 'Offer not found for 0240000000; api_key=do-not-log',
+    }, 404);
+  }, async () => {
+    await assert.rejects(
+      padoda.buyData({
+        reference: 'DH-INCIDENT-123',
+        network: 'MTN',
+        providerPackageCode: 'mtn-master-offer',
+        recipientPhone: '0240000000',
+        volumeInMB: 1000,
+      }),
+      (error) => {
+        assert.equal(error.responseStatus, 404);
+        assert.equal(error.confirmedNotAccepted, false);
+        assert.deepEqual(error.supplierDiagnostics.requestFields.sort(), ['offer_slug', 'phone', 'reference', 'volume']);
+        assert.equal(error.supplierDiagnostics.method, 'POST');
+        assert.equal(error.supplierDiagnostics.url, 'https://padodatagh.test/api/v1/order/mtn');
+        assert.equal(error.supplierDiagnostics.offerSlug, 'mtn-master-offer');
+        assert.equal(error.supplierDiagnostics.volume, 1000);
+        assert.equal(error.supplierDiagnostics.merchantReference, 'DH-INCIDENT-123');
+        assert.equal(error.supplierDiagnostics.phoneFormat, 'Ghana-local-10-digit');
+        const responseText = JSON.stringify(error.supplierDiagnostics.responseBody);
+        assert.match(responseText, /\[REDACTED_PHONE\]/);
+        assert.match(responseText, /api_key=\[REDACTED\]/);
+        assert.doesNotMatch(responseText, /0240000000|do-not-log/);
+        return true;
+      }
+    );
+  });
+});
+
 test('network loss after a purchase request remains ambiguous and is never a confirmed rejection', async () => {
   await withFetch(async () => { throw new TypeError('network unavailable'); }, async () => {
     await assert.rejects(

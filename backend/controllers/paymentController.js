@@ -5,6 +5,7 @@ import env from '../config/environment.js';
 import * as paymentService from '../services/paymentService.js';
 import { isDataProviderConfigured } from '../services/dataProviderService.js';
 import { processPaymentReference } from '../services/orderFulfillmentService.js';
+import { getSupplierControl } from '../services/supplierControlService.js';
 import { generateReference } from '../utils/generateOrderId.js';
 import { safeEqual } from '../utils/tokens.js';
 import AppError from '../utils/AppError.js';
@@ -41,6 +42,11 @@ export const initializePayment = asyncHandler(async (req, res) => {
   }
   if (!['pending', 'payment_pending'].includes(order.status)) {
     throw new AppError(`This order cannot be paid (status: ${order.status})`, 409);
+  }
+
+  const supplierControl = await getSupplierControl();
+  if (supplierControl.suppliers?.padodatagh?.enabled === false) {
+    throw new AppError('Data purchases are temporarily paused while delivery is reviewed.', 503, 'PRIMARY_SUPPLIER_UNAVAILABLE');
   }
 
   if (!paymentService.isPaymentConfigured('paystack')) {
@@ -278,11 +284,14 @@ export const initializePayment = asyncHandler(async (req, res) => {
 
 export const getPaymentConfig = asyncHandler(async (req, res) => {
   const isConfigured = paymentService.isPaymentConfigured('paystack');
+  const supplierControl = await getSupplierControl();
+  const deliveryConfigured = isDataProviderConfigured()
+    && supplierControl.suppliers?.padodatagh?.enabled !== false;
   res.json({
     success: true,
     provider: 'paystack',
     isConfigured,
-    deliveryConfigured: isDataProviderConfigured(),
+    deliveryConfigured,
     allowPaymentsWithoutDelivery: env.allowPaymentsWithoutDelivery,
     feePassedToCustomer: false,
     feePercentage: 0,

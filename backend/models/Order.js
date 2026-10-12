@@ -51,6 +51,18 @@ const orderSchema = new mongoose.Schema(
     supplierClientReference: { type: String, index: true },
     supplierErrorCode: { type: String, default: null },
     supplierResponseStatus: { type: Number, min: 100, max: 599, default: null },
+    supplierDiagnostics: {
+      method: { type: String, default: null },
+      url: { type: String, default: null },
+      requestFields: { type: [String], default: [] },
+      offerSlug: { type: String, default: null },
+      volume: { type: Number, default: null },
+      merchantReference: { type: String, default: null },
+      phoneFormat: { type: String, default: null },
+      responseBody: { type: mongoose.Schema.Types.Mixed, default: null },
+      durationMs: { type: Number, default: null },
+      capturedAt: { type: Date, default: null },
+    },
     supplierStatus: {
       type: String,
       enum: ['not_started', 'not_submitted', 'pending', 'completed', 'failed', 'refunded', 'uncertain'],
@@ -150,6 +162,7 @@ orderSchema.methods.toCustomerJSON = function () {
   delete order.supplierClientReference;
   delete order.supplierErrorCode;
   delete order.supplierResponseStatus;
+  delete order.supplierDiagnostics;
   delete order.supplierStatus;
   delete order.supplierSubmitted;
   delete order.supplierSubmittedAt;

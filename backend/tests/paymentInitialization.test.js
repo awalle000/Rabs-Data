@@ -6,15 +6,16 @@ process.env.JWT_SECRET ||= 'test-secret';
 process.env.PAYSTACK_SECRET_KEY = 'mock-paystack-secret';
 process.env.PADODATAGH_API_KEY = 'mock-padoda-key';
 
-const [{ default: Order }, { default: Payment }, { default: User }, { default: env }, { initializePayment }] = await Promise.all([
+const [{ default: Order }, { default: Payment }, { default: User }, { default: SupplierControl }, { default: env }, { initializePayment }] = await Promise.all([
   import('../models/Order.js'),
   import('../models/Payment.js'),
   import('../models/User.js'),
+  import('../models/SupplierControl.js'),
   import('../config/environment.js'),
   import('../controllers/paymentController.js'),
 ]);
 
-const makeHarness = ({ failPaymentCreate = false, gatewayTimeout = false, customer = '64d9e76af742f8ab3f1e29d1', existingPayment = null } = {}) => {
+const makeHarness = ({ failPaymentCreate = false, gatewayTimeout = false, customer = '64d9e76af742f8ab3f1e29d1', existingPayment = null, supplierEnabled = true } = {}) => {
   const order = {
     _id: '64d9e76af742f8ab3f1e29d2',
     orderId: 'DH-20261009-000001',
@@ -48,6 +49,7 @@ const makeHarness = ({ failPaymentCreate = false, gatewayTimeout = false, custom
     paymentCreate: Payment.create,
     paymentUpdateOne: Payment.updateOne,
     userFindById: User.findById,
+    supplierControlFindOne: SupplierControl.findOne,
     fetch: globalThis.fetch,
   };
   let createAttempts = 0;
@@ -81,6 +83,7 @@ const makeHarness = ({ failPaymentCreate = false, gatewayTimeout = false, custom
     return { modifiedCount: payment ? 1 : 0 };
   };
   User.findById = () => ({ select: async () => ({ email: 'buyer@example.com' }) });
+  SupplierControl.findOne = () => ({ lean: async () => ({ key: 'default', suppliers: { padodatagh: { enabled: supplierEnabled } } }) });
   globalThis.fetch = async (url, options) => {
     gatewayRequests += 1;
     if (gatewayTimeout) throw new TypeError('simulated timeout');
@@ -103,6 +106,7 @@ const makeHarness = ({ failPaymentCreate = false, gatewayTimeout = false, custom
       Payment.create = originals.paymentCreate;
       Payment.updateOne = originals.paymentUpdateOne;
       User.findById = originals.userFindById;
+      SupplierControl.findOne = originals.supplierControlFindOne;
       globalThis.fetch = originals.fetch;
     },
   };
@@ -354,6 +358,29 @@ test('valid tracking token cannot repair an existing payment with a different re
     );
     assert.equal(harness.payments.get('DHP-DIFFERENT-PAYMENT').user, undefined);
     assert.equal(harness.counts().gatewayRequests, 0);
+  } finally {
+    await harness.restore();
+  }
+});
+
+test('disabled supplier blocks direct payment before reusing authorization or contacting Paystack', async () => {
+  const harness = makeHarness({ supplierEnabled: false, existingPayment: {
+    _id: 'payment-existing',
+    reference: 'DHP-EXISTING',
+    user: '64d9e76af742f8ab3f1e29d1',
+    order: '64d9e76af742f8ab3f1e29d2',
+    purpose: 'order',
+    provider: 'paystack',
+    amount: 10,
+    currency: 'GHS',
+    status: 'pending',
+    authorizationUrl: 'https://checkout.paystack.test/existing',
+    providerMetadata: { rabsPaymentReference: 'DHP-EXISTING', rabsOrderId: '64d9e76af742f8ab3f1e29d2', rabsUserId: '64d9e76af742f8ab3f1e29d1' },
+  } });
+  try {
+    await assert.rejects(invoke(), (error) => error.code === 'PRIMARY_SUPPLIER_UNAVAILABLE');
+    assert.equal(harness.counts().gatewayRequests, 0);
+    assert.equal(harness.order.status, 'payment_pending');
   } finally {
     await harness.restore();
   }

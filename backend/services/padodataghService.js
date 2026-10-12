@@ -77,6 +77,32 @@ const parseResponse = async (response) => {
   }
 };
 
+const redactSupplierText = (value) => String(value)
+  .replace(/(?:\+?233|0)\d[\d\s()-]{7,}\d/g, '[REDACTED_PHONE]')
+  .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[REDACTED_EMAIL]')
+  .replace(/(api[-_ ]?key|authorization|token|password)(\s*[:=]\s*)[^\s,;"']+/gi, '$1$2[REDACTED]')
+  .slice(0, 240);
+
+const summarizeSupplierErrorBody = (body) => {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const summary = {};
+  for (const key of ['success', 'code', 'error', 'message', 'status']) {
+    const value = body[key];
+    if (typeof value === 'boolean' || typeof value === 'number') summary[key] = value;
+    else if (typeof value === 'string') summary[key] = redactSupplierText(value);
+  }
+  return Object.keys(summary).length ? summary : null;
+};
+
+const safeRequestTarget = (rawUrl) => {
+  try {
+    const target = new URL(rawUrl);
+    return `${target.origin}${target.pathname}`;
+  } catch {
+    return '[INVALID_SUPPLIER_URL]';
+  }
+};
+
 const request = async (path, { method = 'GET', body, purchase = false } = {}) => {
   if (!isConfigured()) {
     const error = new AppError('PadodaTagh is not configured. Set PADODATAGH_API_KEY on the backend.', 503, 'PADODATAGH_NOT_CONFIGURED');
@@ -89,7 +115,8 @@ const request = async (path, { method = 'GET', body, purchase = false } = {}) =>
   const startedAt = Date.now();
 
   try {
-    const response = await fetch(`${env.padodatagh.baseUrl}${path}`, {
+    const requestUrl = `${env.padodatagh.baseUrl}${path}`;
+    const response = await fetch(requestUrl, {
       method,
       headers: {
         'x-api-key': env.padodatagh.apiKey,
@@ -105,6 +132,18 @@ const request = async (path, { method = 'GET', body, purchase = false } = {}) =>
       const error = new AppError(`PadodaTagh request failed (HTTP ${response.status}).`, response.status >= 500 ? 502 : response.status, 'PADODATAGH_HTTP_ERROR');
       error.responseStatus = response.status;
       error.responseTimeMs = Date.now() - startedAt;
+      error.supplierDiagnostics = {
+        method,
+        url: safeRequestTarget(requestUrl),
+        requestFields: body && typeof body === 'object' ? Object.keys(body) : [],
+        offerSlug: typeof body?.offer_slug === 'string' ? body.offer_slug.slice(0, 100) : null,
+        volume: Number.isFinite(Number(body?.volume)) ? Number(body.volume) : null,
+        merchantReference: typeof body?.reference === 'string' ? body.reference.slice(0, 128) : null,
+        phoneFormat: typeof body?.phone === 'string' && /^0\d{9}$/.test(body.phone) ? 'Ghana-local-10-digit' : null,
+        responseBody: summarizeSupplierErrorBody(data),
+        durationMs: error.responseTimeMs,
+        capturedAt: new Date(),
+      };
       error.notSent = !purchase;
       error.confirmedNotAccepted = Boolean(
         purchase && DOCUMENTED_REJECTION_CODES.has(response.status) && data?.success === false

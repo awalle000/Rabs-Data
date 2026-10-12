@@ -110,6 +110,8 @@ function OrderDetail({ id, onUpdated }) {
     ['Supplier Reference', order.supplierReference || order.providerReference || '-'],
     ['Supplier Status', humanize(order.supplierStatus || 'not_started')],
     ['Supplier Error', order.supplierErrorCode ? `${order.supplierErrorCode}${order.supplierResponseStatus ? ` (HTTP ${order.supplierResponseStatus})` : ''}` : '-'],
+    ['Supplier Request', order.supplierDiagnostics ? `${order.supplierDiagnostics.method || '-'} ${order.supplierDiagnostics.url || '-'}; fields: ${(order.supplierDiagnostics.requestFields || []).join(', ') || '-'}` : '-'],
+    ['Supplier Response', order.supplierDiagnostics?.responseBody ? JSON.stringify(order.supplierDiagnostics.responseBody) : '-'],
     ['Payment Method', humanize(order.paymentMethod)],
     ['Created At', formatDate(order.createdAt)],
     ['Paid At', order.paidAt ? formatDate(order.paidAt) : '-'],

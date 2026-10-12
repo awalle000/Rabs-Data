@@ -351,6 +351,7 @@ const submitPersistedOrder = async (order) => {
       supplierStatus: 'uncertain',
       supplierErrorCode: error.code || 'SUPPLIER_SUBMISSION_UNCERTAIN',
       supplierResponseStatus: Number.isInteger(error.responseStatus) ? error.responseStatus : null,
+      ...(error.supplierDiagnostics ? { supplierDiagnostics: error.supplierDiagnostics } : {}),
       failureReason: 'Delivery status unknown, being checked with supplier.',
     } });
     await notifyAdminsSafely(supplierUncertainNotification(order));
