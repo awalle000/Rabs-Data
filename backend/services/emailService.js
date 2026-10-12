@@ -3,11 +3,19 @@ import env from '../config/environment.js';
 
 let transporter = null;
 
+const escapeHtml = (value) => String(value || '').replace(/[&<>"']/g, (character) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+}[character]));
+
 function getTransporter() {
   if (transporter) return transporter;
 
   const { host, port, secure, user, pass } = env.email.smtp;
-  if (!host || !user) {
+  if (!host || !user || !pass || !env.email.from) {
     return null;
   }
 
@@ -29,13 +37,13 @@ function getTransporter() {
  * @param {string} options.userName - User's display name
  * @param {string} options.resetUrl - Full HTTPS password reset link
  * @param {number} options.expiresInMinutes - Expiration time in minutes (default 15)
- * @returns {Promise<{ sent: boolean, reason?: string }>}
+ * @returns {Promise<{ sent: boolean }>}
  */
 export async function sendPasswordResetEmail({ to, userName, resetUrl, expiresInMinutes = 15 }) {
-  const mailer = getTransporter();
-
   const subject = 'Reset Your Rabs Data Password';
   const nameGreeting = userName ? `Hello ${userName},` : 'Hello,';
+  const safeNameGreeting = userName ? `Hello ${escapeHtml(userName)},` : 'Hello,';
+  const safeResetUrl = escapeHtml(resetUrl);
 
   const textContent = `
 ${nameGreeting}
@@ -73,14 +81,14 @@ The Rabs Data Team
   <div class="card">
     <div class="brand">Rabs Data</div>
     <h2>Password Reset Request</h2>
-    <p>${nameGreeting}</p>
+    <p>${safeNameGreeting}</p>
     <p>We received a request to reset the password for your Rabs Data account. Click the button below to choose a new password:</p>
     <p style="text-align: center;">
-      <a href="${resetUrl}" class="btn" target="_blank" rel="noopener noreferrer">Reset My Password</a>
+      <a href="${safeResetUrl}" class="btn" target="_blank" rel="noopener noreferrer">Reset My Password</a>
     </p>
     <p style="font-size: 14px; color: #475569;">
       Or copy and paste this link into your browser:<br>
-      <a href="${resetUrl}" class="link">${resetUrl}</a>
+      <a href="${safeResetUrl}" class="link">${safeResetUrl}</a>
     </p>
     <p style="font-size: 14px; color: #ef4444; font-weight: 500;">
       ⚠️ This link will expire in <strong>${expiresInMinutes} minutes</strong> and can only be used once.
@@ -94,13 +102,37 @@ The Rabs Data Team
 </html>
 `.trim();
 
-  if (!mailer) {
-    if (!env.isProduction) {
-      console.log(`[EmailService DEV] Password reset link for ${to}: ${resetUrl}`);
-    } else {
-      console.warn('[EmailService] SMTP credentials not configured in production. Password reset email could not be sent.');
+  if (env.email.provider === 'resend') {
+    if (!env.email.resendApiKey || !env.email.from) {
+      console.warn('[EmailService] Password reset email not sent: Resend configuration is incomplete.');
+      return { sent: false };
     }
-    return { sent: false, reason: 'smtp_not_configured' };
+
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.email.resendApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ from: env.email.from, to, subject, text: textContent, html: htmlContent }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) {
+        console.error('[EmailService] Password reset email delivery failed.', { code: `RESEND_HTTP_${response.status}` });
+        return { sent: false };
+      }
+      return { sent: true };
+    } catch {
+      console.error('[EmailService] Password reset email delivery failed.', { code: 'RESEND_REQUEST_ERROR' });
+      return { sent: false };
+    }
+  }
+
+  const mailer = getTransporter();
+  if (!mailer) {
+    console.warn('[EmailService] Password reset email not sent: SMTP configuration is incomplete.');
+    return { sent: false };
   }
 
   try {
@@ -112,8 +144,8 @@ The Rabs Data Team
       html: htmlContent,
     });
     return { sent: true };
-  } catch (error) {
-    console.error('[EmailService] Error sending password reset email:', error.message);
-    return { sent: false, reason: error.message };
+  } catch {
+    console.error('[EmailService] Password reset email delivery failed.', { code: 'SMTP_ERROR' });
+    return { sent: false };
   }
 }

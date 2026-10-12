@@ -48,12 +48,12 @@ export default function ForgotPassword() {
         {submitted ? (
           <div className="forgot-password__success">
             <div className="forgot-password__icon" aria-hidden="true">✉️</div>
-            <h2 className="forgot-password__heading">Check your email</h2>
+            <h2 className="forgot-password__heading">Request received</h2>
             <p className="forgot-password__notice">
-              If an account exists for <strong>{email.trim()}</strong>, a password reset link has been sent.
+              If an account exists for <strong>{email.trim()}</strong>, password reset instructions will be emailed if delivery succeeds.
             </p>
             <p className="forgot-password__subnotice">
-              The link is valid for 15 minutes. Check your spam or promotions folder if you do not see it shortly.
+              Reset links expire after 15 minutes. If no email arrives, try again later or contact support.
             </p>
             <div className="forgot-password__actions">
               <Link to="/login" className="btn btn--primary btn--block">

@@ -5,6 +5,7 @@ process.env.MONGODB_URI = 'mongodb://127.0.0.1:27017/rabsdata-test';
 process.env.JWT_SECRET = 'sms-notification-test-secret-with-more-than-32-characters';
 process.env.NODE_ENV = 'production';
 process.env.API_PUBLIC_URL = 'https://api.test';
+process.env.CLIENT_URL = 'https://client.test';
 process.env.PADODATAGH_SMS_ENABLED = 'true';
 process.env.PADODATAGH_SMS_API_KEY = 'test-sms-key';
 process.env.PADODATAGH_SMS_BASE_URL = 'https://padodatagh.test/api/v1';

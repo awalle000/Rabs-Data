@@ -16,6 +16,14 @@ const list = (value) =>
     .filter(Boolean);
 
 const trimSlash = (value) => value.replace(/\/+$/, '');
+const isHttpsOrigin = (value) => {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' && parsed.origin === value && !parsed.username && !parsed.password;
+  } catch {
+    return false;
+  }
+};
 
 const isProduction = process.env.NODE_ENV === 'production';
 const port = Number(process.env.PORT) || 5000;
@@ -30,7 +38,11 @@ if (isProduction && !(process.env.API_PUBLIC_URL || '').startsWith('https://')) 
   process.exit(1);
 }
 
-const clientUrls = list(process.env.CLIENT_URL || process.env.CLIENT_URLS || process.env.CORS_ORIGIN);
+const clientUrls = list(process.env.CLIENT_URL || process.env.CLIENT_URLS || process.env.CORS_ORIGIN).map(trimSlash);
+if (isProduction && (!clientUrls.length || !clientUrls.every(isHttpsOrigin))) {
+  console.error('CLIENT_URL must be the public HTTPS frontend origin in production');
+  process.exit(1);
+}
 if (!isProduction) {
   ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000'].forEach((u) => {
     if (!clientUrls.includes(u)) clientUrls.push(u);
@@ -87,7 +99,9 @@ const env = Object.freeze({
     },
   },
   email: {
+    provider: process.env.EMAIL_PROVIDER || 'smtp',
     from: process.env.EMAIL_FROM || 'Rabs Data <noreply@rabsdata.com>',
+    resendApiKey: process.env.RESEND_API_KEY || '',
     smtp: {
       host: process.env.SMTP_HOST || '',
       port: Number(process.env.SMTP_PORT) || 587,
@@ -97,5 +111,10 @@ const env = Object.freeze({
     },
   },
 });
+
+if (!['smtp', 'resend'].includes(env.email.provider)) {
+  console.error('EMAIL_PROVIDER must be either smtp or resend');
+  process.exit(1);
+}
 
 export default env;

@@ -7,6 +7,7 @@ import generateToken from '../utils/generateToken.js';
 import AppError from '../utils/AppError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { consumePasswordResetToken } from '../utils/passwordResetTokens.js';
+import { requestPasswordReset } from '../utils/requestPasswordReset.js';
 
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 
@@ -47,41 +48,13 @@ export const getMe = asyncHandler(async (req, res) => {
  * Account enumeration protected: returns generic message regardless of email existence.
  */
 export const forgotPassword = asyncHandler(async (req, res) => {
-  const { email } = req.body;
-  const genericMessage = 'If an account exists for this email address, a password reset link has been sent.';
-
-  const normalizedEmail = email.trim().toLowerCase();
-  const user = await User.findOne({ email: normalizedEmail });
-
-  if (!user || !user.isActive) {
-    // Account enumeration protection: Return generic success without revealing existence
-    return res.json({ success: true, message: genericMessage });
-  }
-
-  // Generate cryptographically secure 32-byte token
-  const rawToken = crypto.randomBytes(32).toString('hex');
-  const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
-
-  // Token expires in 15 minutes
-  user.passwordResetTokenHash = hashedToken;
-  user.passwordResetExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
-  await user.save({ validateBeforeSave: false });
-
-  // Safe security log (no raw token, no password, no secret)
-  console.log(`[Security] Password reset requested for user: ${user._id}`);
-
-  // Construct reset URL using clientUrl from config
-  const resetUrl = `${env.clientUrl}/reset-password/${rawToken}`;
-
-  // Send transactional email
-  await sendPasswordResetEmail({
-    to: user.email,
-    userName: user.name,
-    resetUrl,
-    expiresInMinutes: 15,
+  const result = await requestPasswordReset({
+    userModel: User,
+    email: req.body.email,
+    frontendUrl: env.clientUrl,
+    sendEmail: sendPasswordResetEmail,
   });
-
-  res.json({ success: true, message: genericMessage });
+  res.json({ success: true, message: result.message });
 });
 
 /**

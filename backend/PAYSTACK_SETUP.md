@@ -22,6 +22,21 @@ Set these in the backend's Render environment, not in Vercel or any `VITE_*` var
 
 Do not put the secret key in frontend code, Vercel environment variables, browser requests, or logs. A browser return to RabsData does not itself confirm a payment; the order or wallet remains pending until server-side verification succeeds.
 
+## Password-reset email deployment
+
+On Render, configure these backend environment variables:
+
+- `CLIENT_URL`: the exact deployed frontend origin, including `https://` and no path (for example, `https://www.example.com`). Production startup rejects a missing or non-HTTPS value so reset links cannot silently point to localhost.
+- `EMAIL_PROVIDER=resend`: selects the HTTPS Resend API, which avoids relying on outbound SMTP connectivity from the host.
+- `RESEND_API_KEY`: a private Resend API key. Keep it only in Render's backend environment.
+- `EMAIL_FROM`: a sender address/domain verified in Resend, such as `Rabs Data <security@your-verified-domain.com>`.
+
+If using SMTP instead, set `EMAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, and `EMAIL_FROM`. For Gmail, use an app password from an account with 2-Step Verification enabled, and ensure the sender is authorized for that mailbox. Do not use the account's normal Gmail password. Delivery errors are logged by safe error code only; reset tokens are invalidated when delivery fails.
+
+In the frontend hosting service, set `VITE_API_URL` to the backend's public origin (for example, `https://your-api.onrender.com`). The frontend appends `/api`. The backend's `CLIENT_URL` must match that frontend origin exactly for CORS.
+
+Never commit `.env` files or email provider credentials. A successful API response is enumeration-safe and does not claim delivery; users are told a link will be sent only when delivery is available.
+
 ## PadodaTagh order callback
 
 The optional callback endpoint for the current Render service is `https://rabs-data.onrender.com/api/webhooks/padodatagh`. Configure this URL in PadodaTagh Developer Settings. The published callback contract documents a JSON POST on `completed` and `rejected` status changes, but does not document a test-button payload, callback signature, or custom authentication header. RabsData therefore treats callbacks only as triggers and verifies the order status with the authenticated PadodaTagh API before changing an order. Empty and synthetic callbacks without a matching submitted merchant reference are acknowledged as ignored and cannot update an order. Keep the PadodaTagh API key backend-only.
