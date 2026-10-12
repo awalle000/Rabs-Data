@@ -1,11 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import nodemailer from 'nodemailer';
 import env from '../config/environment.js';
 import User from '../models/User.js';
 import { requestPasswordReset } from '../utils/requestPasswordReset.js';
 import { consumePasswordResetToken } from '../utils/passwordResetTokens.js';
-import { sendPasswordResetEmail, sendSmtpMail, smtpTimeoutOptions } from '../services/emailService.js';
+import {
+  sendPasswordResetEmail,
+  sendSmtpMail,
+  smtpTimeoutOptions,
+  summarizeSmtpError,
+  summarizeSmtpInfo,
+  verifySmtpTransport,
+} from '../services/emailService.js';
 
 const createUser = () => ({
   _id: 'user-reset-test',
@@ -15,6 +23,7 @@ const createUser = () => ({
 });
 
 const createUserModel = (user) => ({
+  findOne: () => ({ select: async () => user }),
   findOneAndUpdate(filter, update) {
     return {
       select: async () => {
@@ -45,11 +54,11 @@ test('reset request stores only a token hash and emails an expiring HTTPS link',
     email: ' PERSON@example.com ',
     frontendUrl: 'https://rabsdata.example',
     now: () => 1_800_000_000_000,
-    sendEmail: async (options) => { message = options; return { sent: true }; },
+    sendEmail: async (options) => { message = options; return { outcome: 'accepted' }; },
   });
 
   const token = message.resetUrl.split('/').at(-1);
-  assert.equal(result.sent, true);
+  assert.equal(result.outcome, 'accepted');
   assert.match(token, /^[a-f\d]{64}$/);
   assert.equal(user.passwordResetTokenHash, crypto.createHash('sha256').update(token).digest('hex'));
   assert.notEqual(user.passwordResetTokenHash, token);
@@ -68,7 +77,7 @@ test('concurrent reset retries create one active token and send one email', asyn
     frontendUrl: 'https://rabsdata.example',
     sendEmail: async () => {
       sends += 1;
-      return { sent: true };
+      return { outcome: 'accepted' };
     },
   });
 
@@ -77,15 +86,38 @@ test('concurrent reset retries create one active token and send one email', asyn
   assert.match(user.passwordResetTokenHash, /^[a-f\d]{64}$/);
 });
 
+test('ambiguous delivery retains the token and suppresses duplicate email retries', async () => {
+  const user = createUser();
+  const userModel = createUserModel(user);
+  let sends = 0;
+  const request = () => requestPasswordReset({
+    userModel,
+    email: user.email,
+    frontendUrl: 'https://rabsdata.example',
+    sendEmail: async () => {
+      sends += 1;
+      return { outcome: 'unknown' };
+    },
+  });
+
+  const first = await request();
+  const tokenHash = user.passwordResetTokenHash;
+  const retry = await request();
+  assert.equal(first.outcome, 'unknown');
+  assert.equal(retry.outcome, 'not_issued');
+  assert.equal(user.passwordResetTokenHash, tokenHash);
+  assert.equal(sends, 1);
+});
+
 test('unknown account receives the same generic response without sending email', async () => {
   let sends = 0;
   const result = await requestPasswordReset({
     userModel: createUserModel(null),
     email: 'missing@example.com',
     frontendUrl: 'https://rabsdata.example',
-    sendEmail: async () => { sends += 1; return { sent: true }; },
+    sendEmail: async () => { sends += 1; return { outcome: 'accepted' }; },
   });
-  assert.equal(result.sent, false);
+  assert.equal(result.outcome, 'not_issued');
   assert.equal(sends, 0);
   assert.match(result.message, /If an account exists/);
 });
@@ -146,7 +178,7 @@ test('User model accepts the reset password and rejects the old password', async
 });
 
 test('failed or throwing email delivery removes the stored reset token', async () => {
-  for (const sendEmail of [async () => ({ sent: false }), async () => { throw new Error('private transport details'); }]) {
+  for (const sendEmail of [async () => ({ outcome: 'failed' }), async () => { throw new Error('private transport details'); }]) {
     const user = createUser();
     const result = await requestPasswordReset({
       userModel: createUserModel(user),
@@ -154,7 +186,7 @@ test('failed or throwing email delivery removes the stored reset token', async (
       frontendUrl: 'https://rabsdata.example',
       sendEmail,
     });
-    assert.equal(result.sent, false);
+    assert.equal(result.outcome, 'failed');
     assert.equal(user.passwordResetTokenHash, undefined);
     assert.equal(user.passwordResetExpiresAt, undefined);
   }
@@ -188,7 +220,7 @@ test('Resend provider uses HTTPS API and escapes user-controlled HTML', async (t
     resetUrl: 'https://rabsdata.example/reset-password/token',
   });
   const payload = JSON.parse(request.options.body);
-  assert.equal(result.sent, true);
+  assert.equal(result.outcome, 'accepted');
   assert.equal(request.url, 'https://api.resend.com/emails');
   assert.equal(request.options.headers.Authorization, 'Bearer test-api-key');
   assert.match(payload.html, /&lt;script&gt;/);
@@ -222,7 +254,7 @@ test('Resend delivery rejection is reported as failure without exposing provider
     userName: 'Customer',
     resetUrl: 'https://rabsdata.example/reset-password/token',
   });
-  assert.equal(result.sent, false);
+  assert.equal(result.outcome, 'failed');
   assert.equal(logged[1].code, 'RESEND_HTTP_422');
   assert.doesNotMatch(JSON.stringify(logged), /secret provider detail|test-api-key/);
 });
@@ -234,9 +266,9 @@ test('database lookup failure rejects before token creation or email delivery', 
       userModel: { findOneAndUpdate: async () => { throw new Error('database unavailable'); } },
       email: 'person@example.com',
       frontendUrl: 'https://rabsdata.example',
-      sendEmail: async () => { sends += 1; return { sent: true }; },
+      sendEmail: async () => { sends += 1; return { outcome: 'accepted' }; },
     }),
-    /database unavailable/
+    /Password reset request could not be processed/
   );
   assert.equal(sends, 0);
 });
@@ -270,5 +302,122 @@ test('SMTP transport has bounded connect, greeting, and socket timeouts', () => 
     connectionTimeout: 5000,
     greetingTimeout: 5000,
     socketTimeout: 10000,
+  });
+});
+
+test('Gmail SMTP transport uses implicit TLS and reports Nodemailer delivery counts', async (t) => {
+  const original = {
+    provider: env.email.provider,
+    from: env.email.from,
+    smtp: { ...env.email.smtp },
+    createTransport: nodemailer.createTransport,
+    info: console.info,
+  };
+  let transportOptions;
+  let resultInfo;
+  let sendFailure;
+  let safeResultLog;
+  const capturedLogs = [];
+  env.email.provider = 'smtp';
+  env.email.from = 'Rabs Data <sender@example.com>';
+  Object.assign(env.email.smtp, {
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
+    user: 'sender@example.com',
+    pass: 'test-app-password',
+  });
+  nodemailer.createTransport = (options) => {
+    transportOptions = options;
+    return {
+      sendMail: async () => {
+        if (sendFailure) throw sendFailure;
+        return resultInfo;
+      },
+      verify: async () => true,
+    };
+  };
+  console.info = (...args) => {
+    capturedLogs.push(args);
+    if (args[0] === '[EmailService] Password-reset SMTP result.') safeResultLog = args[1];
+  };
+  t.after(() => {
+    env.email.provider = original.provider;
+    env.email.from = original.from;
+    Object.assign(env.email.smtp, original.smtp);
+    nodemailer.createTransport = original.createTransport;
+    console.info = original.info;
+  });
+
+  resultInfo = { accepted: ['recipient@example.com'], rejected: [], messageId: 'smtp-accepted-id' };
+  const accepted = await sendPasswordResetEmail({
+    to: 'recipient@example.com', userName: 'Customer',
+    resetUrl: 'https://rabsdata.example/reset-password/token', requestId: 'request-accepted',
+  });
+  assert.equal(accepted.outcome, 'accepted');
+  assert.deepEqual(await verifySmtpTransport(), { outcome: 'verified' });
+  assert.equal(transportOptions.host, 'smtp.gmail.com');
+  assert.equal(transportOptions.port, 465);
+  assert.equal(transportOptions.secure, true);
+  assert.equal(transportOptions.auth.user, 'sender@example.com');
+  assert.equal(transportOptions.auth.pass, 'test-app-password');
+  assert.deepEqual(transportOptions, { host: 'smtp.gmail.com', port: 465, secure: true,
+    auth: { user: 'sender@example.com', pass: 'test-app-password' }, ...smtpTimeoutOptions });
+  assert.deepEqual({ acceptedCount: safeResultLog.acceptedCount, rejectedCount: safeResultLog.rejectedCount, messageId: safeResultLog.messageId }, {
+    acceptedCount: 1, rejectedCount: 0, messageId: 'smtp-accepted-id',
+  });
+  assert.doesNotMatch(JSON.stringify(capturedLogs), /recipient@example\.com|sender@example\.com|test-app-password|reset-password\/token/);
+  assert.match(JSON.stringify(capturedLogs), /request-accepted/);
+
+  resultInfo = { accepted: [], rejected: ['recipient@example.com'], messageId: 'smtp-rejected-id' };
+  const rejected = await sendPasswordResetEmail({
+    to: 'recipient@example.com', userName: 'Customer',
+    resetUrl: 'https://rabsdata.example/reset-password/token', requestId: 'request-rejected',
+  });
+  assert.equal(rejected.outcome, 'failed');
+  assert.equal(safeResultLog.acceptedCount, 0);
+  assert.equal(safeResultLog.rejectedCount, 1);
+
+  for (const [failure, requestId, stage, code] of [
+    [Object.assign(new Error('private authentication detail'), { code: 'EAUTH' }), 'request-auth', 'authentication', 'SMTP_AUTH_FAILED'],
+    [Object.assign(new Error('private connection detail'), { code: 'ECONNECTION' }), 'request-connection', 'connection', 'ECONNECTION'],
+  ]) {
+    sendFailure = failure;
+    const failed = await sendPasswordResetEmail({
+      to: 'recipient@example.com', userName: 'Customer',
+      resetUrl: 'https://rabsdata.example/reset-password/secret-token', requestId,
+    });
+    assert.equal(failed.outcome, 'failed');
+    assert.equal(safeResultLog.requestId, requestId);
+    assert.equal(safeResultLog.stage, stage);
+    assert.equal(safeResultLog.code, code);
+    assert.doesNotMatch(JSON.stringify(safeResultLog), /private authentication detail|private connection detail|test-app-password|recipient@example.com|secret-token/);
+  }
+});
+
+test('SMTP outcomes distinguish auth, connection, recipient rejection, and ambiguous timeout', () => {
+  assert.deepEqual(summarizeSmtpError({ code: 'EAUTH' }), {
+    outcome: 'failed', stage: 'authentication', code: 'SMTP_AUTH_FAILED',
+  });
+  assert.deepEqual(summarizeSmtpError({ code: 'ECONNECTION' }), {
+    outcome: 'failed', stage: 'connection', code: 'ECONNECTION',
+  });
+  assert.deepEqual(summarizeSmtpError({ code: 'EENVELOPE', command: 'RCPT TO' }), {
+    outcome: 'failed', stage: 'recipient', code: 'EENVELOPE',
+  });
+  assert.deepEqual(summarizeSmtpError({ code: 'ETIMEDOUT', command: 'OVERALL_SEND' }), {
+    outcome: 'unknown', stage: 'delivery', code: 'SMTP_TIMEOUT',
+  });
+  assert.deepEqual(summarizeSmtpError({ code: 'ETIMEDOUT', command: 'CONN' }), {
+    outcome: 'failed', stage: 'connection', code: 'SMTP_TIMEOUT',
+  });
+  assert.deepEqual(summarizeSmtpError({ code: 'ESOCKET', command: 'DATA' }), {
+    outcome: 'unknown', stage: 'delivery', code: 'SMTP_ERROR',
+  });
+  assert.deepEqual(summarizeSmtpInfo({ accepted: [], rejected: ['person@example.com'], messageId: 'smtp-id' }), {
+    outcome: 'failed', acceptedCount: 0, rejectedCount: 1, messageId: 'smtp-id',
+  });
+  assert.deepEqual(summarizeSmtpInfo({ accepted: ['person@example.com'], rejected: [], messageId: 'smtp-id' }), {
+    outcome: 'accepted', acceptedCount: 1, rejectedCount: 0, messageId: 'smtp-id',
   });
 });

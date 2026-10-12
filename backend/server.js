@@ -7,6 +7,7 @@ import { startSupplierCatalogScheduler } from './services/supplierCatalogService
 import { startLedgerAudit } from './jobs/auditLedger.js';
 import { startSmsDispatcher } from './services/smsNotificationService.js';
 import { startAdminPushDispatcher } from './services/adminPushService.js';
+import { verifySmtpTransport } from './services/emailService.js';
 
 const start = async () => {
   try {
@@ -20,6 +21,7 @@ const start = async () => {
   app.listen(env.port, () => {
     console.log(`Backend running on http://localhost:${env.port}`);
     console.log(`Rabs Data API running in ${env.nodeEnv} mode on port ${env.port}`);
+    void verifySmtpTransport();
   });
 
   startPaymentReconciliation();

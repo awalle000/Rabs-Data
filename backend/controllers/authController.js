@@ -48,13 +48,17 @@ export const getMe = asyncHandler(async (req, res) => {
  * Account enumeration protected: returns generic message regardless of email existence.
  */
 export const forgotPassword = asyncHandler(async (req, res) => {
+  const requestId = crypto.randomUUID();
+  req.requestId = requestId;
+  res.setHeader('X-Request-ID', requestId);
   const result = await requestPasswordReset({
     userModel: User,
     email: req.body.email,
     frontendUrl: env.clientUrl,
     sendEmail: sendPasswordResetEmail,
+    requestId,
   });
-  res.json({ message: result.message });
+  res.json({ message: result.message, requestId });
 });
 
 /**

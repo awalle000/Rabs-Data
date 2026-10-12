@@ -32,7 +32,17 @@ export const errorHandler = (err, req, res, next) => {
   const statusCode = handled.statusCode || 500;
 
   if (statusCode >= 500) {
-    console.error(`[api-error] ${req.method} ${req.path} ${statusCode} ${handled.code || handled.name || 'INTERNAL_ERROR'}`);
+    if (req.requestId) {
+      console.error('[api-error]', {
+        method: req.method,
+        path: req.path,
+        statusCode,
+        code: handled.code || handled.name || 'INTERNAL_ERROR',
+        requestId: req.requestId,
+      });
+    } else {
+      console.error(`[api-error] ${req.method} ${req.path} ${statusCode} ${handled.code || handled.name || 'INTERNAL_ERROR'}`);
+    }
   }
 
   res.status(statusCode).json({

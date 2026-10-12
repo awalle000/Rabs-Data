@@ -21,8 +21,52 @@ function getTransporter() {
   if (transporter) return transporter;
 
   const { host, port, secure, user, pass } = env.email.smtp;
-  if (!host || !user || !pass || !env.email.from) {
+  const missingVariables = [
+    !host && 'SMTP_HOST',
+    !Number.isFinite(port) && 'SMTP_PORT',
+    !user && 'SMTP_USER',
+    !pass && 'SMTP_PASS',
+    !env.email.from && 'EMAIL_FROM',
+  ].filter(Boolean);
+  if (missingVariables.length) {
+    console.warn('[EmailService] SMTP configuration is incomplete.', {
+      provider: env.email.provider,
+      missingVariables,
+    });
     return null;
+  }
+
+  const senderAddress = env.email.from.match(/<([^>]+)>/)?.[1] || env.email.from;
+  const senderMatchesAuthenticatedAccount = senderAddress.trim().toLowerCase() === user.trim().toLowerCase();
+  const smtpUserLooksLikeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user);
+  const gmailTlsShapeValid = host.toLowerCase() !== 'smtp.gmail.com'
+    || (port === 465 && secure === true)
+    || (port === 587 && secure === false);
+  console.info('[EmailService] SMTP transport configured.', {
+    provider: env.email.provider,
+    host,
+    port,
+    secure,
+    credentialsConfigured: true,
+    smtpUserLooksLikeEmail,
+    senderMatchesAuthenticatedAccount,
+    gmailTlsShapeValid,
+  });
+  if (!gmailTlsShapeValid) {
+    console.warn('[EmailService] Gmail SMTP TLS settings are invalid.', {
+      invalidVariables: ['SMTP_PORT', 'SMTP_SECURE'],
+      expectedCombinations: ['465/true', '587/false'],
+    });
+    return null;
+  }
+  if (host.toLowerCase() === 'smtp.gmail.com' && !smtpUserLooksLikeEmail) {
+    console.warn('[EmailService] Gmail SMTP_USER is not a full email address.', { invalidVariables: ['SMTP_USER'] });
+    return null;
+  }
+  if (host.toLowerCase() === 'smtp.gmail.com' && !senderMatchesAuthenticatedAccount) {
+    console.warn('[EmailService] Gmail sender differs from SMTP_USER; verify the sender is a configured Gmail alias.', {
+      code: 'SMTP_SENDER_IDENTITY_MISMATCH',
+    });
   }
 
   transporter = nodemailer.createTransport({
@@ -36,15 +80,16 @@ function getTransporter() {
   return transporter;
 }
 
-export const sendSmtpMail = async (mailer, message, timeoutMs = smtpSendTimeoutMs) => {
+const runSmtpOperation = async (mailer, operation, timeoutMs, command) => {
   let timer;
   try {
     return await Promise.race([
-      mailer.sendMail(message),
+      Promise.resolve().then(operation),
       new Promise((resolve, reject) => {
         timer = setTimeout(() => {
           const error = new Error('SMTP operation timed out');
           error.code = 'ETIMEDOUT';
+          error.command = command;
           try { mailer.close(); } catch { /* The timed-out transport is discarded. */ }
           reject(error);
         }, timeoutMs);
@@ -55,6 +100,62 @@ export const sendSmtpMail = async (mailer, message, timeoutMs = smtpSendTimeoutM
   }
 };
 
+export const sendSmtpMail = (mailer, message, timeoutMs = smtpSendTimeoutMs) =>
+  runSmtpOperation(mailer, () => mailer.sendMail(message), timeoutMs, 'OVERALL_SEND');
+
+export const verifySmtpTransport = async () => {
+  if (env.email.provider !== 'smtp') return { outcome: 'skipped' };
+  try {
+    const mailer = getTransporter();
+    if (!mailer) return { outcome: 'failed', code: 'SMTP_CONFIGURATION_INCOMPLETE' };
+    await runSmtpOperation(mailer, () => mailer.verify(), smtpSendTimeoutMs, 'OVERALL_VERIFY');
+    console.info('[EmailService] SMTP transport verification succeeded.', { provider: 'smtp' });
+    return { outcome: 'verified' };
+  } catch (error) {
+    if (error?.code === 'ETIMEDOUT') transporter = null;
+    const details = summarizeSmtpError(error);
+    const code = details.code === 'SMTP_TIMEOUT' ? 'SMTP_VERIFY_TIMEOUT' : details.code;
+    console.error('[EmailService] SMTP transport verification failed.', { stage: details.stage, code });
+    return { outcome: 'failed', code };
+  }
+};
+
+export const summarizeSmtpError = (error) => {
+  const code = String(error?.code || 'SMTP_ERROR').toUpperCase();
+  const command = String(error?.command || '').toUpperCase();
+  if (code === 'EAUTH') return { outcome: 'failed', stage: 'authentication', code: 'SMTP_AUTH_FAILED' };
+  if (['ECONNECTION', 'ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH'].includes(code)) {
+    return { outcome: 'failed', stage: 'connection', code };
+  }
+  if (code === 'EENVELOPE' || command === 'RCPT TO') {
+    return { outcome: 'failed', stage: 'recipient', code };
+  }
+  if (code === 'ETIMEDOUT' || code === 'ECONNRESET') {
+    const beforeMessage = ['CONN', 'CONNECT', 'GREETING', 'AUTH'].includes(command);
+    return {
+      outcome: beforeMessage ? 'failed' : 'unknown',
+      stage: beforeMessage ? 'connection' : 'delivery',
+      code: code === 'ETIMEDOUT' ? 'SMTP_TIMEOUT' : code,
+    };
+  }
+  return { outcome: 'unknown', stage: 'delivery', code: 'SMTP_ERROR' };
+};
+
+export const summarizeSmtpInfo = (info) => {
+  const acceptedCount = Array.isArray(info?.accepted) ? info.accepted.length : 0;
+  const rejectedCount = Array.isArray(info?.rejected) ? info.rejected.length : 0;
+  return {
+    outcome: acceptedCount > 0 ? 'accepted' : rejectedCount > 0 ? 'failed' : 'unknown',
+    acceptedCount,
+    rejectedCount,
+    messageId: typeof info?.messageId === 'string' ? info.messageId : undefined,
+  };
+};
+
+const logDelivery = (requestId, details) => {
+  console.info('[EmailService] Password-reset SMTP result.', { requestId, ...details });
+};
+
 /**
  * Sends a password reset email to the user.
  *
@@ -63,9 +164,9 @@ export const sendSmtpMail = async (mailer, message, timeoutMs = smtpSendTimeoutM
  * @param {string} options.userName - User's display name
  * @param {string} options.resetUrl - Full HTTPS password reset link
  * @param {number} options.expiresInMinutes - Expiration time in minutes (default 15)
- * @returns {Promise<{ sent: boolean }>}
+ * @returns {Promise<{ outcome: 'accepted' | 'failed' | 'unknown' }>}
  */
-export async function sendPasswordResetEmail({ to, userName, resetUrl, expiresInMinutes = 15 }) {
+export async function sendPasswordResetEmail({ to, userName, resetUrl, requestId, expiresInMinutes = 15 }) {
   const subject = 'Reset Your Rabs Data Password';
   const nameGreeting = userName ? `Hello ${userName},` : 'Hello,';
   const safeNameGreeting = userName ? `Hello ${escapeHtml(userName)},` : 'Hello,';
@@ -131,7 +232,7 @@ The Rabs Data Team
   if (env.email.provider === 'resend') {
     if (!env.email.resendApiKey || !env.email.from) {
       console.warn('[EmailService] Password reset email not sent: Resend configuration is incomplete.');
-      return { sent: false };
+      return { outcome: 'failed' };
     }
 
     try {
@@ -146,36 +247,44 @@ The Rabs Data Team
       });
       if (!response.ok) {
         console.error('[EmailService] Password reset email delivery failed.', { code: `RESEND_HTTP_${response.status}` });
-        return { sent: false };
+        return { outcome: 'failed' };
       }
-      return { sent: true };
+      return { outcome: 'accepted' };
     } catch {
       console.error('[EmailService] Password reset email delivery failed.', { code: 'RESEND_REQUEST_ERROR' });
-      return { sent: false };
+      return { outcome: 'unknown' };
     }
   }
 
   const mailer = getTransporter();
   if (!mailer) {
-    console.warn('[EmailService] Password reset email not sent: SMTP configuration is incomplete.');
-    return { sent: false };
+    logDelivery(requestId, { outcome: 'failed', stage: 'configuration', code: 'SMTP_CONFIGURATION_INCOMPLETE' });
+    return { outcome: 'failed' };
   }
 
   try {
-    await sendSmtpMail(mailer, {
+    const info = await sendSmtpMail(mailer, {
       from: env.email.from,
       to,
       subject,
       text: textContent,
       html: htmlContent,
     });
-    return { sent: true };
+    const summary = summarizeSmtpInfo(info);
+    const outcome = summary.outcome;
+    logDelivery(requestId, {
+      outcome,
+      stage: 'smtp_response',
+      acceptedCount: summary.acceptedCount,
+      rejectedCount: summary.rejectedCount,
+      messageId: summary.messageId,
+      code: outcome === 'failed' ? 'SMTP_RECIPIENT_REJECTED' : undefined,
+    });
+    return { outcome };
   } catch (error) {
     if (error?.code === 'ETIMEDOUT') transporter = null;
-    const code = error?.code === 'ETIMEDOUT' ? 'SMTP_TIMEOUT'
-      : error?.code === 'EAUTH' ? 'SMTP_AUTH_FAILED'
-        : 'SMTP_ERROR';
-    console.error('[EmailService] Password reset email delivery failed.', { code });
-    return { sent: false };
+    const details = summarizeSmtpError(error);
+    logDelivery(requestId, details);
+    return { outcome: details.outcome };
   }
 }
