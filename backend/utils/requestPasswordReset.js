@@ -75,7 +75,8 @@ export const requestPasswordReset = async ({ userModel, email, frontendUrl, send
       : result?.outcome === 'unknown' ? 'unknown'
         : 'failed';
   } catch {
-    console.error('[Security] Password-reset delivery operation failed.', { requestId: correlationId, outcome: 'failed', code: 'EMAIL_DELIVERY_ERROR' });
+    outcome = 'unknown';
+    console.error('[Security] Password-reset delivery operation failed.', { requestId: correlationId, outcome, code: 'EMAIL_DELIVERY_ERROR' });
   }
 
   let tokenRetained = outcome !== 'failed';

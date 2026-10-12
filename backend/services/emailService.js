@@ -261,6 +261,26 @@ export const verifySmtpTransport = async () => {
     });
     return { outcome: valid ? 'ready' : 'failed' };
   }
+  if (env.email.provider === 'resend') {
+    const missingVariables = [
+      !env.email.resendApiKey && 'RESEND_API_KEY',
+      !env.email.from && 'EMAIL_FROM',
+    ].filter(Boolean);
+    const invalidVariables = [
+      env.email.resendApiKey && env.email.resendApiKey !== env.email.resendApiKey.trim() && 'RESEND_API_KEY',
+      env.email.from && env.email.from !== env.email.from.trim() && 'EMAIL_FROM',
+    ].filter(Boolean);
+    const valid = !missingVariables.length && !invalidVariables.length;
+    console.info('[EmailService] Resend provider configuration checked.', {
+      provider: 'resend',
+      apiKeyConfigured: Boolean(env.email.resendApiKey),
+      senderConfigured: Boolean(env.email.from),
+      missingVariables,
+      invalidVariables,
+      outcome: valid ? 'ready' : 'failed',
+    });
+    return { outcome: valid ? 'ready' : 'failed' };
+  }
   if (env.email.provider !== 'smtp') {
     console.warn('[EmailService] SMTP startup verification skipped because a non-SMTP provider is selected.', {
       provider: env.email.provider,
@@ -412,7 +432,17 @@ The Rabs Data Team
 
   if (env.email.provider === 'resend') {
     if (!env.email.resendApiKey || !env.email.from) {
-      console.warn('[EmailService] Password reset email not sent: Resend configuration is incomplete.');
+      console.warn('[EmailService] Password-reset delivery result.', {
+        provider: 'resend',
+        requestId,
+        outcome: 'failed',
+        stage: 'configuration',
+        code: 'RESEND_CONFIGURATION_INCOMPLETE',
+        missingVariables: [
+          !env.email.resendApiKey && 'RESEND_API_KEY',
+          !env.email.from && 'EMAIL_FROM',
+        ].filter(Boolean),
+      });
       return { outcome: 'failed' };
     }
 
@@ -427,12 +457,33 @@ The Rabs Data Team
         signal: AbortSignal.timeout(15000),
       });
       if (!response.ok) {
-        console.error('[EmailService] Password reset email delivery failed.', { code: `RESEND_HTTP_${response.status}` });
-        return { outcome: 'failed' };
+        const outcome = response.status >= 500 ? 'unknown' : 'failed';
+        console.error('[EmailService] Password-reset delivery result.', {
+          provider: 'resend',
+          requestId,
+          outcome,
+          stage: 'http',
+          code: `RESEND_HTTP_${response.status}`,
+          httpStatus: response.status,
+        });
+        return { outcome };
       }
+      console.info('[EmailService] Password-reset delivery result.', {
+        provider: 'resend',
+        requestId,
+        outcome: 'accepted',
+        stage: 'provider_response',
+        httpStatus: response.status,
+      });
       return { outcome: 'accepted' };
     } catch {
-      console.error('[EmailService] Password reset email delivery failed.', { code: 'RESEND_REQUEST_ERROR' });
+      console.error('[EmailService] Password-reset delivery result.', {
+        provider: 'resend',
+        requestId,
+        outcome: 'unknown',
+        stage: 'request',
+        code: 'RESEND_REQUEST_ERROR',
+      });
       return { outcome: 'unknown' };
     }
   }

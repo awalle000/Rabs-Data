@@ -179,19 +179,30 @@ test('User model accepts the reset password and rejects the old password', async
   assert.equal(await user.comparePassword('ResetPassword456!'), true);
 });
 
-test('failed or throwing email delivery removes the stored reset token', async () => {
-  for (const sendEmail of [async () => ({ outcome: 'failed' }), async () => { throw new Error('private transport details'); }]) {
-    const user = createUser();
-    const result = await requestPasswordReset({
-      userModel: createUserModel(user),
-      email: user.email,
-      frontendUrl: 'https://rabsdata.example',
-      sendEmail,
-    });
-    assert.equal(result.outcome, 'failed');
-    assert.equal(user.passwordResetTokenHash, undefined);
-    assert.equal(user.passwordResetExpiresAt, undefined);
-  }
+test('confirmed email failure removes the stored reset token', async () => {
+  const user = createUser();
+  const result = await requestPasswordReset({
+    userModel: createUserModel(user),
+    email: user.email,
+    frontendUrl: 'https://rabsdata.example',
+    sendEmail: async () => ({ outcome: 'failed' }),
+  });
+  assert.equal(result.outcome, 'failed');
+  assert.equal(user.passwordResetTokenHash, undefined);
+  assert.equal(user.passwordResetExpiresAt, undefined);
+});
+
+test('throwing email delivery is ambiguous and retains the token to prevent duplicates', async () => {
+  const user = createUser();
+  const result = await requestPasswordReset({
+    userModel: createUserModel(user),
+    email: user.email,
+    frontendUrl: 'https://rabsdata.example',
+    sendEmail: async () => { throw new Error('private transport details'); },
+  });
+  assert.equal(result.outcome, 'unknown');
+  assert.match(user.passwordResetTokenHash, /^[a-f\d]{64}$/);
+  assert.ok(user.passwordResetExpiresAt > new Date());
 });
 
 test('Resend provider uses HTTPS API and escapes user-controlled HTML', async (t) => {
@@ -259,6 +270,32 @@ test('Resend delivery rejection is reported as failure without exposing provider
   assert.equal(result.outcome, 'failed');
   assert.equal(logged[1].code, 'RESEND_HTTP_422');
   assert.doesNotMatch(JSON.stringify(logged), /secret provider detail|test-api-key/);
+});
+
+test('Resend server errors remain ambiguous because delivery may already have been accepted', async (t) => {
+  const original = {
+    provider: env.email.provider,
+    apiKey: env.email.resendApiKey,
+    from: env.email.from,
+    fetch: globalThis.fetch,
+  };
+  env.email.provider = 'resend';
+  env.email.resendApiKey = 'test-api-key';
+  env.email.from = 'Rabs Data <reset@example.com>';
+  globalThis.fetch = async () => new Response('provider unavailable', { status: 500 });
+  t.after(() => {
+    env.email.provider = original.provider;
+    env.email.resendApiKey = original.apiKey;
+    env.email.from = original.from;
+    globalThis.fetch = original.fetch;
+  });
+
+  const result = await sendPasswordResetEmail({
+    to: 'person@example.com',
+    userName: 'Customer',
+    resetUrl: 'https://rabsdata.example/reset-password/token',
+  });
+  assert.equal(result.outcome, 'unknown');
 });
 
 test('Apps Script config requires an HTTPS deployed /exec URL and a non-whitespace secret', () => {
@@ -477,23 +514,32 @@ test('SMTP transport has bounded connect, greeting, and socket timeouts', () => 
   });
 });
 
-test('startup explicitly reports SMTP verification skipped for a non-SMTP provider', async (t) => {
-  const originalProvider = env.email.provider;
+test('startup reports Resend readiness without attempting SMTP verification', async (t) => {
+  const original = {
+    provider: env.email.provider,
+    apiKey: env.email.resendApiKey,
+    from: env.email.from,
+  };
   const originalInfo = console.info;
   const originalWarn = console.warn;
   const logs = [];
   env.email.provider = 'resend';
+  env.email.resendApiKey = 'test-api-key';
+  env.email.from = 'Rabs Data <reset@example.com>';
   console.info = (...args) => logs.push(args);
   console.warn = (...args) => logs.push(args);
   t.after(() => {
-    env.email.provider = originalProvider;
+    env.email.provider = original.provider;
+    env.email.resendApiKey = original.apiKey;
+    env.email.from = original.from;
     console.info = originalInfo;
     console.warn = originalWarn;
   });
 
-  assert.deepEqual(await verifySmtpTransport(), { outcome: 'skipped' });
+  assert.deepEqual(await verifySmtpTransport(), { outcome: 'ready' });
   assert.equal(logs[0][1].provider, 'resend');
-  assert.equal(logs[1][1].code, 'SMTP_VERIFICATION_SKIPPED');
+  assert.equal(logs[1][1].provider, 'resend');
+  assert.equal(logs[1][1].outcome, 'ready');
 });
 
 test('Gmail SMTP transport uses implicit TLS and reports Nodemailer delivery counts', async (t) => {
@@ -611,4 +657,81 @@ test('SMTP outcomes distinguish auth, connection, recipient rejection, and ambig
   assert.deepEqual(summarizeSmtpInfo({ accepted: ['person@example.com'], rejected: [], messageId: 'smtp-id' }), {
     outcome: 'accepted', acceptedCount: 1, rejectedCount: 0, messageId: 'smtp-id',
   });
+});
+
+test('Apps Script authentication rejection is handled as a confirmed failure', async () => {
+  const result = await sendGoogleAppsScriptEmail({
+    url: 'https://script.google.com/macros/s/deployment-id/exec',
+    secret: 'server-shared-secret',
+    to: 'customer@example.com',
+    subject: 'Password reset',
+    textBody: 'text',
+    htmlBody: '<p>html</p>',
+    fetchImpl: async () => new Response(JSON.stringify({ ok: false, error: 'unauthorized' }), { status: 200 }),
+  });
+  assert.equal(result.outcome, 'failed');
+});
+
+test('startup reports incomplete Resend configuration without exposing provider values', async (t) => {
+  const original = {
+    provider: env.email.provider,
+    apiKey: env.email.resendApiKey,
+    from: env.email.from,
+    info: console.info,
+  };
+  const logs = [];
+  env.email.provider = 'resend';
+  env.email.resendApiKey = '';
+  env.email.from = '';
+  console.info = (...args) => logs.push(args);
+  t.after(() => {
+    env.email.provider = original.provider;
+    env.email.resendApiKey = original.apiKey;
+    env.email.from = original.from;
+    console.info = original.info;
+  });
+
+  assert.deepEqual(await verifySmtpTransport(), { outcome: 'failed' });
+  assert.equal(logs.some((entry) => entry[1]?.missingVariables?.includes('RESEND_API_KEY')), true);
+  assert.doesNotMatch(JSON.stringify(logs), /server-shared-secret|deployment-id/);
+});
+
+test('Apps Script password-reset delivery sends the configured Vercel link with the stored token hash', async (t) => {
+  const original = {
+    provider: env.email.provider,
+    config: env.email.googleAppsScript,
+    fetch: globalThis.fetch,
+  };
+  let request;
+  env.email.provider = 'google-apps-script';
+  env.email.googleAppsScript = {
+    url: 'https://script.google.com/macros/s/deployment-id/exec',
+    secret: 'server-shared-secret',
+  };
+  globalThis.fetch = async (url, options) => {
+    request = { url, options };
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+  t.after(() => {
+    env.email.provider = original.provider;
+    env.email.googleAppsScript = original.config;
+    globalThis.fetch = original.fetch;
+  });
+
+  const user = createUser();
+  const result = await requestPasswordReset({
+    userModel: createUserModel(user),
+    email: user.email,
+    frontendUrl: 'https://rabs-data.vercel.app',
+    sendEmail: sendPasswordResetEmail,
+  });
+  const payload = JSON.parse(request.options.body);
+  const resetUrl = payload.textBody.match(/https:\/\/rabs-data\.vercel\.app\/reset-password\/[a-f\d]{64}/)?.[0];
+  const rawToken = resetUrl?.split('/').at(-1);
+
+  assert.equal(result.outcome, 'accepted');
+  assert.ok(resetUrl);
+  assert.equal(user.passwordResetTokenHash, crypto.createHash('sha256').update(rawToken).digest('hex'));
+  assert.equal(payload.to, user.email);
+  assert.equal(payload.htmlBody.includes(resetUrl), true);
 });
