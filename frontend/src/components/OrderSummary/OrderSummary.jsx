@@ -13,12 +13,13 @@ export default function OrderSummary({
   price,
   dataPrice,
   fee,
+  feePassedToCustomer = false,
   finalPrice,
   orderId,
   children,
 }) {
   const total = finalPrice ?? price;
-  const showFeeBreakdown = fee != null && fee > 0;
+  const showFeeBreakdown = feePassedToCustomer && fee != null && fee > 0;
 
   return (
     <section className="order-summary card" aria-label={title}>

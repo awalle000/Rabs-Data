@@ -13,6 +13,7 @@ import { roundMoney } from '../utils/money.js';
 import { isExplicitPadodaTaghOrder } from '../utils/supplierPolicies.js';
 import { calculateProfits } from '../utils/paymentFees.js';
 import { notifyAdminsSafely } from './adminNotificationService.js';
+import { getSupplierFailureUpdates } from '../utils/supplierFailure.js';
 import {
   queueOrderDeliveredSms,
   queueOrderFailedSms,
@@ -60,7 +61,7 @@ export const recoverSupplierPurchaseLedger = async ({ limit = 50 } = {}) => {
   }
 };
 
-const syncPurchaseOperationState = async (order, status) => {
+export const syncPurchaseOperationState = async (order, status) => {
   if (!order?.purchaseOperation) return;
 
   await PurchaseOperation.findByIdAndUpdate(order.purchaseOperation, {
@@ -172,7 +173,16 @@ const failOrder = async (order, reason) => {
 };
 
 // Applies a provider result to a "processing" order. Safe to call repeatedly.
-export const applyProviderResult = async (order, result) => {
+export const canAdminReconcileFailedOrder = (order) =>
+  order?.status === 'failed'
+  && order.paymentStatus === 'paid'
+  && order.paymentMethod === 'direct';
+
+export const applyProviderResult = async (order, result, { allowFailedPaidDirectOrder = false } = {}) => {
+  const allowFailedOrder = allowFailedPaidDirectOrder && canAdminReconcileFailedOrder(order);
+  const applicableStatuses = allowFailedOrder
+    ? { $in: ['processing', 'paid', 'failed'] }
+    : { $in: ['processing', 'paid'] };
   const supplierRef = result.providerReference || order.providerReference || order.supplierReference;
   const returnedCost = result.supplierCost ?? result.amount;
   const supplierCost = returnedCost !== undefined && Number.isFinite(Number(returnedCost)) && Number(returnedCost) >= 0
@@ -204,7 +214,7 @@ export const applyProviderResult = async (order, result) => {
 
   if (result.status === 'successful' || supplierStatus === 'completed') {
     const updated = await Order.findOneAndUpdate(
-      { _id: order._id, status: { $in: ['processing', 'paid'] } },
+      { _id: order._id, status: applicableStatuses },
       {
         $set: {
           ...baseUpdates,
@@ -212,6 +222,7 @@ export const applyProviderResult = async (order, result) => {
           completedAt: new Date(),
           supplierCompletedAt: new Date(),
           needsReview: false,
+          refundRequired: false,
         },
       },
       { returnDocument: 'after' }
@@ -230,7 +241,7 @@ export const applyProviderResult = async (order, result) => {
       ? 'Data delivery could not be completed by supplier. Transaction refunded.'
       : (result.message || 'Data delivery failed. Please contact support.');
     const failed = await Order.findOneAndUpdate(
-      { _id: order._id, status: { $in: ['processing', 'paid'] } },
+      { _id: order._id, status: applicableStatuses },
       { $set: { ...baseUpdates, status: order.paymentMethod === 'wallet' ? 'refunded' : 'failed', ...(order.paymentMethod === 'wallet' ? { paymentStatus: 'refunded' } : {}), failureReason: reason, refundRequired: true, completedAt: new Date() } },
       { returnDocument: 'after' }
     );
@@ -254,7 +265,7 @@ export const applyProviderResult = async (order, result) => {
   }
 
   // Still pending / processing
-  await Order.updateOne({ _id: order._id, status: { $in: ['processing', 'paid'] } }, { $set: baseUpdates });
+  await Order.updateOne({ _id: order._id, status: applicableStatuses }, { $set: baseUpdates });
   return Order.findById(order._id);
 };
 
@@ -306,8 +317,14 @@ const submitPersistedOrder = async (order) => {
 
     await recordSupplierEvent(supplierKey, error.timedOut ? 'timeout' : 'error', { status: error.code || 'error', message: error.message });
     if (error.notSent || error.confirmedNotAccepted) {
-      await Order.updateOne({ _id: order._id }, { $set: { supplierSubmitted: false, supplierStatus: 'not_submitted' } });
+      await Order.updateOne(
+        { _id: order._id, status: 'processing' },
+        { $set: getSupplierFailureUpdates(error) }
+      );
       const failed = await failOrder(order, 'Data delivery is temporarily unavailable. Please contact support.');
+      if (failed && ['failed', 'refunded'].includes(failed.status)) {
+        await syncPurchaseOperationState(failed, 'failed');
+      }
       await notifyAdminsSafely(supplierFailureNotification(order));
       await notifyOrderUpdate(failed);
       await queueOrderFailedSms(failed);
@@ -329,7 +346,13 @@ const submitPersistedOrder = async (order) => {
       console.warn(`[supplier] Post-error status check failed for ${order.orderId}:`, checkErr.message);
     }
 
-    await Order.updateOne({ _id: order._id }, { $set: { needsReview: true, supplierStatus: 'uncertain', failureReason: 'Delivery status unknown, being checked with supplier.' } });
+    await Order.updateOne({ _id: order._id, status: 'processing' }, { $set: {
+      needsReview: true,
+      supplierStatus: 'uncertain',
+      supplierErrorCode: error.code || 'SUPPLIER_SUBMISSION_UNCERTAIN',
+      supplierResponseStatus: Number.isInteger(error.responseStatus) ? error.responseStatus : null,
+      failureReason: 'Delivery status unknown, being checked with supplier.',
+    } });
     await notifyAdminsSafely(supplierUncertainNotification(order));
     return Order.findById(order._id);
   }

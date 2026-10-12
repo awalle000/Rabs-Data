@@ -206,6 +206,7 @@ export default function OrderSuccess() {
         price={order.sellingPrice}
         dataPrice={order.baseProductPrice || order.sellingPrice}
         fee={order.paymentGatewayFee}
+        feePassedToCustomer={order.feePassedToCustomer === true}
         finalPrice={order.customerChargedAmount || order.sellingPrice}
         orderId={order.orderId}
       />

@@ -448,7 +448,17 @@ export const checkOrderSupplierStatus = asyncHandler(async (req, res) => {
     providerReference: order.providerReference || order.supplierReference,
   });
 
-  const updated = await applyProviderResult(order, check);
+  let updated;
+  if (check.status === 'uncertain' || check.status === 'processing') {
+    await Order.updateOne({ _id: order._id, status: order.status }, { $set: {
+      needsReview: true,
+      supplierStatus: check.status === 'uncertain' ? 'uncertain' : 'pending',
+      failureReason: 'Supplier has not provided a conclusive order status. Do not resubmit or refund automatically.',
+    } });
+    updated = await Order.findById(order._id);
+  } else {
+    updated = await applyProviderResult(order, check, { allowFailedPaidDirectOrder: true });
+  }
   res.json({
     success: true,
     order: updated,

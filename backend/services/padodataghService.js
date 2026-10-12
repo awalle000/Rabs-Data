@@ -3,7 +3,7 @@ import AppError from '../utils/AppError.js';
 import { normalizePhone } from '../utils/validators.js';
 
 const NETWORKS = new Set(['mtn', 'telecel', 'at']);
-const DOCUMENTED_REJECTION_CODES = new Set([400, 401, 402, 404]);
+const DOCUMENTED_REJECTION_CODES = new Set([400, 401, 402]);
 
 export const isConfigured = () => Boolean(env.padodatagh.apiKey && env.padodatagh.baseUrl);
 

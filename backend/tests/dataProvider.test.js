@@ -81,3 +81,27 @@ test('missing historical supplier never submits or checks PadodaTagh', async () 
   });
   assert.equal(requests, 0);
 });
+
+test('supplier status with a mismatched merchant reference remains uncertain', async () => {
+  await withFetch(async () => jsonResponse({ success: true, data: {
+    orderId: 'supplier-order-1', reference: 'OTHER-ORDER', status: 'completed',
+  } }), async () => {
+    const result = await dataProvider.checkTransactionStatus({
+      supplier: 'PadodaTagh', reference: 'DH-EXPECTED-1', providerReference: null,
+    });
+    assert.equal(result.status, 'uncertain');
+    assert.equal(result.supplierStatus, 'uncertain');
+  });
+});
+
+test('supplier status with a mismatched known supplier ID remains uncertain', async () => {
+  await withFetch(async () => jsonResponse({ success: true, data: {
+    orderId: 'different-supplier-order', reference: 'DH-EXPECTED-2', status: 'completed',
+  } }), async () => {
+    const result = await dataProvider.checkTransactionStatus({
+      supplier: 'PadodaTagh', reference: 'DH-EXPECTED-2', providerReference: 'supplier-order-2',
+    });
+    assert.equal(result.status, 'uncertain');
+    assert.equal(result.supplierStatus, 'uncertain');
+  });
+});

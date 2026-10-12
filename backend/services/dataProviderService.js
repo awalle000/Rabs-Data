@@ -72,6 +72,23 @@ export const purchaseData = async ({
   };
 };
 
+const validateSupplierStatusIdentity = (result, reference, providerReference) => {
+  const clientReferenceMatches = String(result?.clientReference || '') === String(reference || '');
+  const returnedSupplierReference = String(result?.providerReference || '');
+  const supplierReferenceMatches = Boolean(returnedSupplierReference)
+    && (!providerReference || returnedSupplierReference === String(providerReference));
+  if (clientReferenceMatches && supplierReferenceMatches) return result;
+
+  return {
+    status: 'uncertain',
+    supplierStatus: 'uncertain',
+    providerReference: providerReference || null,
+    clientReference: result?.clientReference || null,
+    refunded: false,
+    message: 'PadodaTagh status response did not match the submitted order references.',
+  };
+};
+
 export const checkTransactionStatus = async ({ supplier, reference, providerReference }) => {
   if (supplier !== 'PadodaTagh') {
     return { status: 'uncertain', supplierStatus: 'uncertain', providerReference: providerReference || null, refunded: false, message: 'Historical order supplier is retired; no automatic status request was made.' };
@@ -80,7 +97,10 @@ export const checkTransactionStatus = async ({ supplier, reference, providerRefe
   {
     try {
       const bySupplierId = await padodatagh.getOrderStatus({ reference, providerReference });
-      if (bySupplierId.status !== 'uncertain') return bySupplierId;
+      if (bySupplierId.status !== 'uncertain') {
+        const verified = validateSupplierStatusIdentity(bySupplierId, reference, providerReference);
+        if (verified.status !== 'uncertain') return verified;
+      }
     } catch (error) {
       console.warn(`[dataProvider] PadodaTagh status lookup failed for ${reference}:`, error.message);
       if (error.responseStatus !== 404) {
@@ -91,7 +111,10 @@ export const checkTransactionStatus = async ({ supplier, reference, providerRefe
     if (reference && reference !== providerReference) {
       try {
         const byMerchantReference = await padodatagh.getOrderStatus({ reference, providerReference: null });
-        if (byMerchantReference.status !== 'uncertain') return byMerchantReference;
+        if (byMerchantReference.status !== 'uncertain') {
+          const verified = validateSupplierStatusIdentity(byMerchantReference, reference, providerReference);
+          if (verified.status !== 'uncertain') return verified;
+        }
       } catch (error) {
         if (error.responseStatus !== 404) {
           return { status: 'uncertain', supplierStatus: 'uncertain', providerReference: providerReference || null, refunded: false, message: 'Could not determine PadodaTagh order status' };
@@ -101,7 +124,7 @@ export const checkTransactionStatus = async ({ supplier, reference, providerRefe
 
     try {
       const historyResult = await padodatagh.getHistoryOrder(reference);
-      if (historyResult) return historyResult;
+      if (historyResult) return validateSupplierStatusIdentity(historyResult, reference, providerReference);
     } catch (error) {
       console.warn(`[dataProvider] PadodaTagh history lookup failed for ${reference}:`, error.message);
     }

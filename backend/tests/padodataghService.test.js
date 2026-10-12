@@ -170,6 +170,16 @@ test('only a documented HTTP rejection with a parsed explicit failure is classif
       (error) => error.confirmedNotAccepted === false && error.notSent === false
     );
   });
+
+  await withFetch(async () => jsonResponse({ success: false, message: 'Resource not found' }, 404), async () => {
+    await assert.rejects(
+      padoda.buyData({ reference: 'RABS-007', network: 'MTN', providerPackageCode: 'offer', recipientPhone: '0240000000', volumeInMB: 1000 }),
+      (error) => error.code === 'PADODATAGH_HTTP_ERROR'
+        && error.responseStatus === 404
+        && error.confirmedNotAccepted === false
+        && error.notSent === false
+    );
+  });
 });
 
 test('network loss after a purchase request remains ambiguous and is never a confirmed rejection', async () => {

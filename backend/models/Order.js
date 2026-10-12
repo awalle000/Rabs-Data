@@ -49,6 +49,8 @@ const orderSchema = new mongoose.Schema(
     supplierCost: { type: Number, min: 0 },
     supplierReference: { type: String, index: true },
     supplierClientReference: { type: String, index: true },
+    supplierErrorCode: { type: String, default: null },
+    supplierResponseStatus: { type: Number, min: 100, max: 599, default: null },
     supplierStatus: {
       type: String,
       enum: ['not_started', 'not_submitted', 'pending', 'completed', 'failed', 'refunded', 'uncertain'],
@@ -146,6 +148,8 @@ orderSchema.methods.toCustomerJSON = function () {
   delete order.supplier;
   delete order.supplierReference;
   delete order.supplierClientReference;
+  delete order.supplierErrorCode;
+  delete order.supplierResponseStatus;
   delete order.supplierStatus;
   delete order.supplierSubmitted;
   delete order.supplierSubmittedAt;
