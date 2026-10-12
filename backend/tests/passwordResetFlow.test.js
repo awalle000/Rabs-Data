@@ -5,22 +5,43 @@ import env from '../config/environment.js';
 import User from '../models/User.js';
 import { requestPasswordReset } from '../utils/requestPasswordReset.js';
 import { consumePasswordResetToken } from '../utils/passwordResetTokens.js';
-import { sendPasswordResetEmail } from '../services/emailService.js';
+import { sendPasswordResetEmail, sendSmtpMail, smtpTimeoutOptions } from '../services/emailService.js';
 
 const createUser = () => ({
   _id: 'user-reset-test',
   email: 'person@example.com',
   name: '<script>alert(1)</script>',
   isActive: true,
-  saves: 0,
-  async save() { this.saves += 1; },
+});
+
+const createUserModel = (user) => ({
+  findOneAndUpdate(filter, update) {
+    return {
+      select: async () => {
+        if (!user || (filter.email && user.email !== filter.email)) return null;
+        if (filter.passwordResetTokenHash) {
+          if (user._id !== filter._id || user.passwordResetTokenHash !== filter.passwordResetTokenHash) return null;
+          user.passwordResetTokenHash = undefined;
+          user.passwordResetExpiresAt = undefined;
+          return user;
+        }
+
+        if (!user.isActive) return null;
+        const expiredOrMissing = !user.passwordResetTokenHash || !user.passwordResetExpiresAt
+          || user.passwordResetExpiresAt <= filter.$or[2].passwordResetExpiresAt.$lte;
+        if ((filter._id && user._id !== filter._id) || !user.isActive || !expiredOrMissing) return null;
+        Object.assign(user, update.$set);
+        return user;
+      },
+    };
+  },
 });
 
 test('reset request stores only a token hash and emails an expiring HTTPS link', async () => {
   const user = createUser();
   let message;
   const result = await requestPasswordReset({
-    userModel: { findOne: async (filter) => (filter.email === user.email ? user : null) },
+    userModel: createUserModel(user),
     email: ' PERSON@example.com ',
     frontendUrl: 'https://rabsdata.example',
     now: () => 1_800_000_000_000,
@@ -37,10 +58,29 @@ test('reset request stores only a token hash and emails an expiring HTTPS link',
   assert.equal(message.expiresInMinutes, 15);
 });
 
+test('concurrent reset retries create one active token and send one email', async () => {
+  const user = createUser();
+  const userModel = createUserModel(user);
+  let sends = 0;
+  const request = () => requestPasswordReset({
+    userModel,
+    email: user.email,
+    frontendUrl: 'https://rabsdata.example',
+    sendEmail: async () => {
+      sends += 1;
+      return { sent: true };
+    },
+  });
+
+  await Promise.all([request(), request()]);
+  assert.equal(sends, 1);
+  assert.match(user.passwordResetTokenHash, /^[a-f\d]{64}$/);
+});
+
 test('unknown account receives the same generic response without sending email', async () => {
   let sends = 0;
   const result = await requestPasswordReset({
-    userModel: { findOne: async () => null },
+    userModel: createUserModel(null),
     email: 'missing@example.com',
     frontendUrl: 'https://rabsdata.example',
     sendEmail: async () => { sends += 1; return { sent: true }; },
@@ -109,7 +149,7 @@ test('failed or throwing email delivery removes the stored reset token', async (
   for (const sendEmail of [async () => ({ sent: false }), async () => { throw new Error('private transport details'); }]) {
     const user = createUser();
     const result = await requestPasswordReset({
-      userModel: { findOne: async () => user },
+      userModel: createUserModel(user),
       email: user.email,
       frontendUrl: 'https://rabsdata.example',
       sendEmail,
@@ -117,7 +157,6 @@ test('failed or throwing email delivery removes the stored reset token', async (
     assert.equal(result.sent, false);
     assert.equal(user.passwordResetTokenHash, undefined);
     assert.equal(user.passwordResetExpiresAt, undefined);
-    assert.equal(user.saves, 2);
   }
 });
 
@@ -186,4 +225,50 @@ test('Resend delivery rejection is reported as failure without exposing provider
   assert.equal(result.sent, false);
   assert.equal(logged[1].code, 'RESEND_HTTP_422');
   assert.doesNotMatch(JSON.stringify(logged), /secret provider detail|test-api-key/);
+});
+
+test('database lookup failure rejects before token creation or email delivery', async () => {
+  let sends = 0;
+  await assert.rejects(
+    requestPasswordReset({
+      userModel: { findOneAndUpdate: async () => { throw new Error('database unavailable'); } },
+      email: 'person@example.com',
+      frontendUrl: 'https://rabsdata.example',
+      sendEmail: async () => { sends += 1; return { sent: true }; },
+    }),
+    /database unavailable/
+  );
+  assert.equal(sends, 0);
+});
+
+test('SMTP overall timeout closes the stuck transport', async () => {
+  let closed = false;
+  const mailer = {
+    sendMail: () => new Promise(() => {}),
+    close: () => { closed = true; },
+  };
+  await assert.rejects(sendSmtpMail(mailer, {}, 10), { code: 'ETIMEDOUT' });
+  assert.equal(closed, true);
+});
+
+test('SMTP success, authentication rejection, and delivery rejection settle promptly', async () => {
+  const success = await sendSmtpMail({ sendMail: async () => ({ accepted: ['person@example.com'] }) }, {});
+  assert.deepEqual(success.accepted, ['person@example.com']);
+
+  await assert.rejects(
+    sendSmtpMail({ sendMail: async () => { throw Object.assign(new Error('private auth details'), { code: 'EAUTH' }); } }, {}),
+    { code: 'EAUTH' }
+  );
+  await assert.rejects(
+    sendSmtpMail({ sendMail: async () => { throw Object.assign(new Error('private delivery details'), { code: 'EENVELOPE' }); } }, {}),
+    { code: 'EENVELOPE' }
+  );
+});
+
+test('SMTP transport has bounded connect, greeting, and socket timeouts', () => {
+  assert.deepEqual(smtpTimeoutOptions, {
+    connectionTimeout: 5000,
+    greetingTimeout: 5000,
+    socketTimeout: 10000,
+  });
 });

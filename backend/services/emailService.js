@@ -2,6 +2,12 @@ import nodemailer from 'nodemailer';
 import env from '../config/environment.js';
 
 let transporter = null;
+const smtpSendTimeoutMs = 12000;
+export const smtpTimeoutOptions = Object.freeze({
+  connectionTimeout: 5000,
+  greetingTimeout: 5000,
+  socketTimeout: 10000,
+});
 
 const escapeHtml = (value) => String(value || '').replace(/[&<>"']/g, (character) => ({
   '&': '&amp;',
@@ -24,10 +30,30 @@ function getTransporter() {
     port,
     secure,
     auth: { user, pass },
+    ...smtpTimeoutOptions,
   });
 
   return transporter;
 }
+
+export const sendSmtpMail = async (mailer, message, timeoutMs = smtpSendTimeoutMs) => {
+  let timer;
+  try {
+    return await Promise.race([
+      mailer.sendMail(message),
+      new Promise((resolve, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error('SMTP operation timed out');
+          error.code = 'ETIMEDOUT';
+          try { mailer.close(); } catch { /* The timed-out transport is discarded. */ }
+          reject(error);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 /**
  * Sends a password reset email to the user.
@@ -136,7 +162,7 @@ The Rabs Data Team
   }
 
   try {
-    await mailer.sendMail({
+    await sendSmtpMail(mailer, {
       from: env.email.from,
       to,
       subject,
@@ -144,8 +170,12 @@ The Rabs Data Team
       html: htmlContent,
     });
     return { sent: true };
-  } catch {
-    console.error('[EmailService] Password reset email delivery failed.', { code: 'SMTP_ERROR' });
+  } catch (error) {
+    if (error?.code === 'ETIMEDOUT') transporter = null;
+    const code = error?.code === 'ETIMEDOUT' ? 'SMTP_TIMEOUT'
+      : error?.code === 'EAUTH' ? 'SMTP_AUTH_FAILED'
+        : 'SMTP_ERROR';
+    console.error('[EmailService] Password reset email delivery failed.', { code });
     return { sent: false };
   }
 }

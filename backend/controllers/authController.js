@@ -54,7 +54,7 @@ export const forgotPassword = asyncHandler(async (req, res) => {
     frontendUrl: env.clientUrl,
     sendEmail: sendPasswordResetEmail,
   });
-  res.json({ success: true, message: result.message });
+  res.json({ message: result.message });
 });
 
 /**
