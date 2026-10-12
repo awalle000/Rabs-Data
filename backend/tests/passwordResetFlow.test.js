@@ -13,6 +13,8 @@ import {
   summarizeSmtpError,
   summarizeSmtpInfo,
   verifySmtpTransport,
+  sendGoogleAppsScriptEmail,
+  validateGoogleAppsScriptConfig,
 } from '../services/emailService.js';
 
 const createUser = () => ({
@@ -257,6 +259,176 @@ test('Resend delivery rejection is reported as failure without exposing provider
   assert.equal(result.outcome, 'failed');
   assert.equal(logged[1].code, 'RESEND_HTTP_422');
   assert.doesNotMatch(JSON.stringify(logged), /secret provider detail|test-api-key/);
+});
+
+test('Apps Script config requires an HTTPS deployed /exec URL and a non-whitespace secret', () => {
+  assert.deepEqual(validateGoogleAppsScriptConfig({
+    url: 'https://script.google.com/macros/s/deployment-id/exec',
+    secret: 'shared-secret',
+  }), { missingVariables: [], invalidVariables: [], endpointValid: true });
+  assert.deepEqual(validateGoogleAppsScriptConfig({
+    url: 'http://script.google.com/macros/s/deployment-id/exec',
+    secret: ' shared-secret ',
+  }), {
+    missingVariables: [],
+    invalidVariables: ['GOOGLE_APPS_SCRIPT_SECRET', 'GOOGLE_APPS_SCRIPT_URL'],
+    endpointValid: false,
+  });
+});
+
+test('Apps Script sends the exact JSON contract and recognizes ok:true without logging secrets', async () => {
+  let request;
+  const logs = [];
+  const originalInfo = console.info;
+  console.info = (...args) => logs.push(args);
+  try {
+    const result = await sendGoogleAppsScriptEmail({
+      url: 'https://script.google.com/macros/s/deployment-id/exec',
+      secret: 'server-shared-secret',
+      to: 'customer@example.com',
+      subject: 'Password reset',
+      textBody: 'Reset instructions',
+      htmlBody: '<p>Reset instructions</p>',
+      requestId: 'gas-success-request',
+      fetchImpl: async (url, options) => {
+        request = { url, options };
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+    });
+
+    assert.equal(result.outcome, 'accepted');
+    assert.equal(request.url, 'https://script.google.com/macros/s/deployment-id/exec');
+    assert.equal(request.options.method, 'POST');
+    assert.equal(request.options.headers['Content-Type'], 'application/json');
+    assert.deepEqual(JSON.parse(request.options.body), {
+      secret: 'server-shared-secret',
+      to: 'customer@example.com',
+      subject: 'Password reset',
+      textBody: 'Reset instructions',
+      htmlBody: '<p>Reset instructions</p>',
+    });
+    assert.equal(request.options.signal.aborted, false);
+    assert.doesNotMatch(JSON.stringify(logs), /server-shared-secret|customer@example\.com|deployment-id|Reset instructions/);
+    assert.match(JSON.stringify(logs), /gas-success-request/);
+  } finally {
+    console.info = originalInfo;
+  }
+});
+
+test('Apps Script ok:false is a confirmed failure and logs no script message or secret', async () => {
+  let logged;
+  const originalError = console.error;
+  console.error = (...args) => { logged = args; };
+  try {
+    const result = await sendGoogleAppsScriptEmail({
+      url: 'https://script.google.com/macros/s/deployment-id/exec',
+      secret: 'server-shared-secret',
+      to: 'customer@example.com',
+      subject: 'Password reset',
+      textBody: 'text',
+      htmlBody: '<p>html</p>',
+      requestId: 'gas-rejected-request',
+      fetchImpl: async () => new Response(JSON.stringify({ ok: false, error: 'private script detail' }), { status: 200 }),
+    });
+    assert.equal(result.outcome, 'failed');
+    assert.equal(logged[1].code, 'GOOGLE_APPS_SCRIPT_REJECTED');
+    assert.equal(logged[1].requestId, 'gas-rejected-request');
+    assert.doesNotMatch(JSON.stringify(logged), /server-shared-secret|customer@example\.com|private script detail/);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+test('Apps Script HTTP errors, malformed responses, and request failures remain ambiguous', async () => {
+  const base = {
+    url: 'https://script.google.com/macros/s/deployment-id/exec',
+    secret: 'server-shared-secret',
+    to: 'customer@example.com',
+    subject: 'Password reset',
+    textBody: 'text',
+    htmlBody: '<p>html</p>',
+    requestId: 'gas-ambiguous-request',
+  };
+
+  const httpError = await sendGoogleAppsScriptEmail({
+    ...base,
+    fetchImpl: async () => new Response('server error', { status: 500 }),
+  });
+  const malformed = await sendGoogleAppsScriptEmail({
+    ...base,
+    fetchImpl: async () => new Response('not json', { status: 200 }),
+  });
+  const networkError = await sendGoogleAppsScriptEmail({
+    ...base,
+    fetchImpl: async () => { throw new TypeError('network unavailable'); },
+  });
+  const timeout = await sendGoogleAppsScriptEmail({
+    ...base,
+    fetchImpl: async () => { throw new DOMException('timed out', 'TimeoutError'); },
+  });
+
+  assert.equal(httpError.outcome, 'unknown');
+  assert.equal(malformed.outcome, 'unknown');
+  assert.equal(networkError.outcome, 'unknown');
+  assert.equal(timeout.outcome, 'unknown');
+});
+
+test('ambiguous Apps Script timeout retains token and suppresses duplicate requests', async () => {
+  const user = createUser();
+  const userModel = createUserModel(user);
+  let sends = 0;
+  const request = () => requestPasswordReset({
+    userModel,
+    email: user.email,
+    frontendUrl: 'https://rabsdata.example',
+    sendEmail: async () => {
+      sends += 1;
+      return sendGoogleAppsScriptEmail({
+        url: 'https://script.google.com/macros/s/deployment-id/exec',
+        secret: 'server-shared-secret',
+        to: user.email,
+        subject: 'Password reset',
+        textBody: 'text',
+        htmlBody: '<p>html</p>',
+        fetchImpl: async () => { throw new DOMException('timed out', 'TimeoutError'); },
+      });
+    },
+  });
+
+  const first = await request();
+  const activeHash = user.passwordResetTokenHash;
+  const second = await request();
+  assert.equal(first.outcome, 'unknown');
+  assert.equal(second.outcome, 'not_issued');
+  assert.equal(user.passwordResetTokenHash, activeHash);
+  assert.equal(sends, 1);
+});
+
+test('startup checks Apps Script configuration and skips SMTP verification', async (t) => {
+  const original = {
+    provider: env.email.provider,
+    config: env.email.googleAppsScript,
+    info: console.info,
+    warn: console.warn,
+  };
+  const logs = [];
+  env.email.provider = 'google-apps-script';
+  env.email.googleAppsScript = {
+    url: 'https://script.google.com/macros/s/deployment-id/exec',
+    secret: 'server-shared-secret',
+  };
+  console.info = (...args) => logs.push(args);
+  console.warn = (...args) => logs.push(args);
+  t.after(() => {
+    env.email.provider = original.provider;
+    env.email.googleAppsScript = original.config;
+    console.info = original.info;
+    console.warn = original.warn;
+  });
+
+  assert.deepEqual(await verifySmtpTransport(), { outcome: 'ready' });
+  assert.equal(logs.some((entry) => entry[1]?.provider === 'google-apps-script' && entry[1]?.outcome === 'ready'), true);
+  assert.doesNotMatch(JSON.stringify(logs), /server-shared-secret|deployment-id/);
 });
 
 test('database lookup failure rejects before token creation or email delivery', async () => {

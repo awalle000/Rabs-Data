@@ -102,6 +102,10 @@ const env = Object.freeze({
     provider: (process.env.EMAIL_PROVIDER || 'smtp').trim().toLowerCase(),
     from: process.env.EMAIL_FROM || 'Rabs Data <noreply@rabsdata.com>',
     resendApiKey: process.env.RESEND_API_KEY || '',
+    googleAppsScript: {
+      url: process.env.GOOGLE_APPS_SCRIPT_URL || '',
+      secret: process.env.GOOGLE_APPS_SCRIPT_SECRET || '',
+    },
     smtp: {
       host: process.env.SMTP_HOST || '',
       port: Number(process.env.SMTP_PORT) || 587,
@@ -112,8 +116,8 @@ const env = Object.freeze({
   },
 });
 
-if (!['smtp', 'resend'].includes(env.email.provider)) {
-  console.error('EMAIL_PROVIDER must be either smtp or resend');
+if (!['smtp', 'resend', 'google-apps-script'].includes(env.email.provider)) {
+  console.error('EMAIL_PROVIDER must be smtp, resend, or google-apps-script');
   process.exit(1);
 }
 

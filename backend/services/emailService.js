@@ -3,6 +3,7 @@ import env from '../config/environment.js';
 
 let transporter = null;
 const smtpSendTimeoutMs = 12000;
+export const googleAppsScriptTimeoutMs = 12000;
 export const smtpTimeoutOptions = Object.freeze({
   connectionTimeout: 5000,
   greetingTimeout: 5000,
@@ -115,8 +116,151 @@ const runSmtpOperation = async (mailer, operation, timeoutMs, command) => {
 export const sendSmtpMail = (mailer, message, timeoutMs = smtpSendTimeoutMs) =>
   runSmtpOperation(mailer, () => mailer.sendMail(message), timeoutMs, 'OVERALL_SEND');
 
+export const validateGoogleAppsScriptConfig = ({ url, secret }) => {
+  const missingVariables = [
+    !url && 'GOOGLE_APPS_SCRIPT_URL',
+    !secret && 'GOOGLE_APPS_SCRIPT_SECRET',
+  ].filter(Boolean);
+  const invalidVariables = [
+    secret && secret !== secret.trim() && 'GOOGLE_APPS_SCRIPT_SECRET',
+  ].filter(Boolean);
+  let endpointValid = false;
+  try {
+    const endpoint = new URL(url);
+    endpointValid = endpoint.protocol === 'https:'
+      && endpoint.hostname === 'script.google.com'
+      && /^\/macros\/s\/[^/]+\/exec\/?$/.test(endpoint.pathname)
+      && !endpoint.username
+      && !endpoint.password;
+  } catch {
+    endpointValid = false;
+  }
+  if (url && !endpointValid) invalidVariables.push('GOOGLE_APPS_SCRIPT_URL');
+  return { missingVariables, invalidVariables, endpointValid };
+};
+
+export const sendGoogleAppsScriptEmail = async ({
+  url,
+  secret,
+  to,
+  subject,
+  textBody,
+  htmlBody,
+  requestId,
+  fetchImpl = fetch,
+  timeoutMs = googleAppsScriptTimeoutMs,
+}) => {
+  const config = validateGoogleAppsScriptConfig({ url, secret });
+  if (config.missingVariables.length || config.invalidVariables.length) {
+    console.error('[EmailService] Password-reset delivery result.', {
+      provider: 'google-apps-script',
+      requestId,
+      outcome: 'failed',
+      stage: 'configuration',
+      code: 'GOOGLE_APPS_SCRIPT_CONFIGURATION_INVALID',
+      missingVariables: config.missingVariables,
+      invalidVariables: config.invalidVariables,
+    });
+    return { outcome: 'failed' };
+  }
+
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ secret, to, subject, textBody, htmlBody }),
+      signal: AbortSignal.timeout(timeoutMs),
+      redirect: 'follow',
+    });
+  } catch (error) {
+    const isTimeout = error?.name === 'TimeoutError' || error?.name === 'AbortError' || error?.code === 'ETIMEDOUT';
+    console.warn('[EmailService] Password-reset delivery result.', {
+      provider: 'google-apps-script',
+      requestId,
+      outcome: 'unknown',
+      stage: 'request',
+      code: isTimeout ? 'GOOGLE_APPS_SCRIPT_TIMEOUT' : 'GOOGLE_APPS_SCRIPT_NETWORK_ERROR',
+    });
+    return { outcome: 'unknown' };
+  }
+
+  if (!response.ok) {
+    console.warn('[EmailService] Password-reset delivery result.', {
+      provider: 'google-apps-script',
+      requestId,
+      outcome: 'unknown',
+      stage: 'http',
+      code: 'GOOGLE_APPS_SCRIPT_HTTP_ERROR',
+      httpStatus: response.status,
+    });
+    return { outcome: 'unknown' };
+  }
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    console.warn('[EmailService] Password-reset delivery result.', {
+      provider: 'google-apps-script',
+      requestId,
+      outcome: 'unknown',
+      stage: 'response',
+      code: 'GOOGLE_APPS_SCRIPT_INVALID_JSON',
+      httpStatus: response.status,
+    });
+    return { outcome: 'unknown' };
+  }
+
+  if (payload?.ok === true) {
+    console.info('[EmailService] Password-reset delivery result.', {
+      provider: 'google-apps-script',
+      requestId,
+      outcome: 'accepted',
+      stage: 'script_response',
+      httpStatus: response.status,
+    });
+    return { outcome: 'accepted' };
+  }
+
+  if (payload?.ok === false) {
+    console.error('[EmailService] Password-reset delivery result.', {
+      provider: 'google-apps-script',
+      requestId,
+      outcome: 'failed',
+      stage: 'script_response',
+      code: 'GOOGLE_APPS_SCRIPT_REJECTED',
+      httpStatus: response.status,
+    });
+    return { outcome: 'failed' };
+  }
+
+  console.warn('[EmailService] Password-reset delivery result.', {
+    provider: 'google-apps-script',
+    requestId,
+    outcome: 'unknown',
+    stage: 'response',
+    code: 'GOOGLE_APPS_SCRIPT_INVALID_RESPONSE',
+    httpStatus: response.status,
+  });
+  return { outcome: 'unknown' };
+};
+
 export const verifySmtpTransport = async () => {
   console.info('[EmailService] Startup email provider selected.', { provider: env.email.provider });
+  if (env.email.provider === 'google-apps-script') {
+    const config = validateGoogleAppsScriptConfig(env.email.googleAppsScript);
+    const valid = !config.missingVariables.length && !config.invalidVariables.length;
+    console.info('[EmailService] Google Apps Script provider configuration checked.', {
+      provider: 'google-apps-script',
+      endpointValid: config.endpointValid,
+      secretConfigured: Boolean(env.email.googleAppsScript.secret),
+      missingVariables: config.missingVariables,
+      invalidVariables: config.invalidVariables,
+      outcome: valid ? 'ready' : 'failed',
+    });
+    return { outcome: valid ? 'ready' : 'failed' };
+  }
   if (env.email.provider !== 'smtp') {
     console.warn('[EmailService] SMTP startup verification skipped because a non-SMTP provider is selected.', {
       provider: env.email.provider,
@@ -254,6 +398,17 @@ The Rabs Data Team
 </body>
 </html>
 `.trim();
+
+  if (env.email.provider === 'google-apps-script') {
+    return sendGoogleAppsScriptEmail({
+      ...env.email.googleAppsScript,
+      to,
+      subject,
+      textBody: textContent,
+      htmlBody: htmlContent,
+      requestId,
+    });
+  }
 
   if (env.email.provider === 'resend') {
     if (!env.email.resendApiKey || !env.email.from) {

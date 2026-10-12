@@ -24,18 +24,24 @@ Do not put the secret key in frontend code, Vercel environment variables, browse
 
 ## Password-reset email deployment
 
-On Render, configure these backend environment variables:
+For Google Apps Script, configure these backend-only Render variables:
 
-- `CLIENT_URL`: the exact deployed frontend origin, including `https://` and no path (for example, `https://www.example.com`). Production startup rejects a missing or non-HTTPS value so reset links cannot silently point to localhost.
-- `EMAIL_PROVIDER=resend`: selects the HTTPS Resend API, which avoids relying on outbound SMTP connectivity from the host.
-- `RESEND_API_KEY`: a private Resend API key. Keep it only in Render's backend environment.
-- `EMAIL_FROM`: a sender address/domain verified in Resend, such as `Rabs Data <security@your-verified-domain.com>`.
+- `EMAIL_PROVIDER=google-apps-script`
+- `GOOGLE_APPS_SCRIPT_URL`: the deployed Apps Script HTTPS web-app URL ending in `/exec`.
+- `GOOGLE_APPS_SCRIPT_SECRET`: the same shared secret stored in the script's `RABSDATA_SHARED_SECRET` property. Keep it only in Render's backend environment; never add it to the frontend or Git.
+- `CLIENT_URL`: the exact deployed frontend origin, including `https://` and no path. Reset links use this value.
 
-If using SMTP instead, set `EMAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, and `EMAIL_FROM`. For Gmail, use `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=465`, and `SMTP_SECURE=true` (implicit TLS), or port `587` with `SMTP_SECURE=false` (STARTTLS). `SMTP_USER` must be the full Gmail address and `SMTP_PASS` a Google App Password from an account with 2-Step Verification enabled; ensure `EMAIL_FROM` is authorized for that mailbox. Do not use the account's normal Gmail password. SMTP connection/greeting/socket operations are bounded at 5s/5s/10s, with a 12-second overall send deadline. Delivery errors are logged by safe error code only; reset tokens are invalidated when delivery fails.
+The backend POSTs JSON fields `secret`, `to`, `subject`, `textBody`, and `htmlBody`. It recognizes `{ "ok": true }` as the script reporting success and `{ "ok": false }` as an explicit failure. A timeout, network error, non-2xx status, or malformed response is treated as ambiguous: the active reset token is retained and another reset email is suppressed until token expiry, preventing duplicates if MailApp sent before the response was lost. A script `{ok:true}` response is not proof of inbox delivery.
 
-In the frontend hosting service, set `VITE_API_URL` to the backend's public origin (for example, `https://your-api.onrender.com`). The frontend appends `/api`. The backend's `CLIENT_URL` must match that frontend origin exactly for CORS.
+For SMTP instead, set `EMAIL_PROVIDER=smtp` and configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, and `EMAIL_FROM`. For Gmail, use `smtp.gmail.com`, port 465 with TLS true, or port 587 with TLS false; authenticate with the full Gmail address and a Google App Password. For Resend, set `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, and an `EMAIL_FROM` sender verified by Resend.
 
-Never commit `.env` files or email provider credentials. A successful API response is enumeration-safe and does not claim delivery; users are told a link will be sent only when delivery is available.
+For all providers, configure these backend/frontend URL values:
+
+- `CLIENT_URL`: the deployed frontend HTTPS origin. Production startup rejects a missing or non-HTTPS value rather than generating localhost reset links.
+- `API_PUBLIC_URL`: the backend's public HTTPS origin. Production startup requires this independently for backend callbacks.
+- Frontend hosting: `VITE_API_URL` set to the backend's public origin; the frontend appends `/api`.
+
+Never commit `.env` files or provider credentials. The reset endpoint uses the same generic response regardless of account existence and does not expose delivery outcomes to the client.
 
 ## PadodaTagh order callback
 
