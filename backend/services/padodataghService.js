@@ -80,7 +80,9 @@ const parseResponse = async (response) => {
 const redactSupplierText = (value) => String(value)
   .replace(/(?:\+?233|0)\d[\d\s()-]{7,}\d/g, '[REDACTED_PHONE]')
   .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[REDACTED_EMAIL]')
-  .replace(/(api[-_ ]?key|authorization|token|password)(\s*[:=]\s*)[^\s,;"']+/gi, '$1$2[REDACTED]')
+  .replace(/(["']?authorization["']?\s*[:=]\s*["']?)(?:Bearer\s+)?[^"'\s,;}]+["']?/gi, '$1[REDACTED]')
+  .replace(/(["']?(?:api[-_ ]?key|authorization|token|password)["']?\s*[:=]\s*["']?)[^"'\s,;}]+["']?/gi, '$1[REDACTED]')
+  .replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED]')
   .slice(0, 240);
 
 const summarizeSupplierErrorBody = (body) => {

@@ -188,7 +188,7 @@ test('ambiguous purchase 404 captures safe request metadata and redacts supplier
     assert.equal(options.method, 'POST');
     return jsonResponse({
       success: false,
-      message: 'Offer not found for 0240000000; api_key=do-not-log',
+      message: 'Offer not found for 0240000000; "apiKey":"do-not-log" Authorization: Bearer do-not-log-either',
     }, 404);
   }, async () => {
     await assert.rejects(
@@ -211,7 +211,8 @@ test('ambiguous purchase 404 captures safe request metadata and redacts supplier
         assert.equal(error.supplierDiagnostics.phoneFormat, 'Ghana-local-10-digit');
         const responseText = JSON.stringify(error.supplierDiagnostics.responseBody);
         assert.match(responseText, /\[REDACTED_PHONE\]/);
-        assert.match(responseText, /api_key=\[REDACTED\]/);
+        assert.match(responseText, /apiKey.*\[REDACTED\]/);
+        assert.match(responseText, /Authorization: \[REDACTED\]/);
         assert.doesNotMatch(responseText, /0240000000|do-not-log/);
         return true;
       }
