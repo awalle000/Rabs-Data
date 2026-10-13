@@ -275,14 +275,24 @@ test('successful clean refresh verifies the existing package without changing re
   const existing = {
     _id: 'clean-package', network: 'Telecel', volumeInMB: 1000, validity: 'Non-expiry',
     name: 'Telecel Standard 1GB', dataAmount: '1GB', bundleType: '', restrictions: [],
-    isActive: true, sellingPrice: 9.75, providerCost: 3.5, providerPackageCode: 'telecel-standard', providerPlanId: '',
-    supplierOffers: { padodatagh: { packageCode: 'telecel-standard', planId: '', supplierCost: 3.5, network: 'Telecel', volumeInMB: 1000, validity: 'Non-expiry', restrictions: [], catalogVerified: true, lastVerifiedAt: new Date(Date.now() - 31 * 60 * 1000) } },
+    isActive: true, sellingPrice: 9.75, providerCost: 3.5, providerPackageCode: 'telecel-standard', providerPlanId: '11111111-1111-4111-8111-111111111111',
+    supplierOffers: { padodatagh: { packageCode: 'telecel-standard', planId: '11111111-1111-4111-8111-111111111111', supplierCost: 3.5, network: 'Telecel', volumeInMB: 1000, validity: 'Non-expiry', restrictions: [], catalogVerified: true, lastVerifiedAt: new Date(Date.now() - 31 * 60 * 1000) } },
     set(path, value) { this.supplierOffers.padodatagh[path.split('.').at(-1)] = value; },
     async save() { this.saved = true; },
   };
   let currentLockToken;
   DataPackage.find = async () => [existing];
-  DataPackage.updateMany = async () => ({ modifiedCount: 0 });
+  DataPackage.updateMany = async (filter, update) => {
+    if (filter['supplierOffers.padodatagh.packageCode'] === existing.supplierOffers.padodatagh.packageCode
+      && filter['supplierOffers.padodatagh.planId']?.$nin?.includes(existing.supplierOffers.padodatagh.planId)) {
+      Object.assign(existing.supplierOffers.padodatagh, {
+        lastVerifiedAt: update.$set['supplierOffers.padodatagh.lastVerifiedAt'],
+        catalogVerified: update.$set['supplierOffers.padodatagh.catalogVerified'],
+      });
+      return { modifiedCount: 1 };
+    }
+    return { modifiedCount: 0 };
+  };
   CatalogSyncState.findOne = () => ({ lean: async () => null });
   SupplierControl.findOne = () => ({ lean: async () => ({ suppliers: { padodatagh: {} } }) });
   CatalogSyncState.findOneAndUpdate = async (filter, update) => {
@@ -312,6 +322,88 @@ test('successful clean refresh verifies the existing package without changing re
     assert.equal(existing.supplierOffers.padodatagh.planId, '427a88e6-60d9-4ecc-a944-c81cbe0e7508');
     assert.equal(existing.isActive, true);
     assert.equal(isEligiblePadodaPackage(existing), true);
+  } finally {
+    DataPackage.find = originals.dataFind;
+    DataPackage.updateMany = originals.dataUpdateMany;
+    CatalogSyncState.findOne = originals.catalogFindOne;
+    CatalogSyncState.findOneAndUpdate = originals.catalogFindOneAndUpdate;
+    SupplierControl.findOne = originals.supplierFindOne;
+    SupplierControl.findOneAndUpdate = originals.supplierFindOneAndUpdate;
+    globalThis.fetch = originals.fetch;
+  }
+});
+
+test('catalog refresh keeps multiple bundle sizes sharing a slug verified with their own plan UUIDs', async () => {
+  const originals = {
+    dataFind: DataPackage.find,
+    dataUpdateMany: DataPackage.updateMany,
+    catalogFindOne: CatalogSyncState.findOne,
+    catalogFindOneAndUpdate: CatalogSyncState.findOneAndUpdate,
+    supplierFindOne: SupplierControl.findOne,
+    supplierFindOneAndUpdate: SupplierControl.findOneAndUpdate,
+    fetch: globalThis.fetch,
+  };
+  const slug = 'mtn_master_beneficiary_portal';
+  const records = [
+    { name: 'MTN 1GB', volumeInMB: 1000, providerCost: 4.25, sellingPrice: 4.95, planId: '11111111-1111-4111-8111-111111111111', currentPlanId: '11111111-1111-4111-8111-111111111111' },
+    { name: 'MTN 2GB', volumeInMB: 2000, providerCost: 8.55, sellingPrice: 9.8, planId: '22222222-2222-4222-8222-222222222222', currentPlanId: '22222222-2222-4222-8222-222222222222' },
+  ].map((item) => ({
+    ...item,
+    network: 'MTN',
+    validity: 'Non-expiry',
+    dataAmount: item.name,
+    bundleType: '',
+    restrictions: null,
+    providerPackageCode: slug,
+    providerPlanId: item.currentPlanId,
+    isActive: true,
+    supplierOffers: { padodatagh: {
+      packageCode: slug,
+      planId: item.currentPlanId,
+      supplierCost: item.providerCost,
+      network: 'MTN',
+      volumeInMB: item.volumeInMB,
+      validity: 'Non-expiry',
+      bundleType: '',
+      restrictions: null,
+      catalogVerified: false,
+      lastVerifiedAt: null,
+    } },
+    set(path, value) {
+      const parts = path.split('.');
+      let target = this;
+      while (parts.length > 1) target = target[parts.shift()];
+      target[parts[0]] = value;
+    },
+    async save() { this.saved = true; },
+  }));
+  const planIds = ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'];
+
+  DataPackage.find = async (filter) => records.filter((record) =>
+    record.network === filter.network && record.volumeInMB === filter.volumeInMB && record.validity === filter.validity);
+  DataPackage.updateMany = async () => { throw new Error('unrelated package invalidation must not occur'); };
+  CatalogSyncState.findOne = () => ({ lean: async () => null });
+  CatalogSyncState.findOneAndUpdate = async (filter, update) => ({ lockToken: update.$set?.lockToken || filter.lockToken });
+  SupplierControl.findOne = () => ({ lean: async () => ({ suppliers: { padodatagh: {} } }) });
+  SupplierControl.findOneAndUpdate = async () => ({});
+  globalThis.fetch = async () => new Response(JSON.stringify({ success: true, data: [
+    { plan_id: planIds[0], offer_id: planIds[0], offer_slug: slug, name: 'MTN 1GB', network: 'mtn', volume: 1000, price: 4.25, description: 'Non-expiry' },
+    { plan_id: planIds[1], offer_id: planIds[1], offer_slug: slug, name: 'MTN 2GB', network: 'mtn', volume: 2000, price: 8.55, description: 'Non-expiry' },
+  ] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+  try {
+    const result = await syncSupplierOffers();
+    assert.equal(result.success, true);
+    assert.equal(result.summary.updated, 2);
+    for (const [index, record] of records.entries()) {
+      assert.equal(record.providerPlanId, planIds[index]);
+      assert.equal(record.supplierOffers.padodatagh.planId, planIds[index]);
+      assert.equal(record.supplierOffers.padodatagh.catalogVerified, true);
+      assert.ok(record.supplierOffers.padodatagh.lastVerifiedAt instanceof Date);
+      assert.equal(isEligiblePadodaPackage(record), true);
+    }
+    assert.equal(records[0].sellingPrice, 4.95);
+    assert.equal(records[1].sellingPrice, 9.8);
   } finally {
     DataPackage.find = originals.dataFind;
     DataPackage.updateMany = originals.dataUpdateMany;

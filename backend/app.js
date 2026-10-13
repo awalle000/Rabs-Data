@@ -52,6 +52,7 @@ app.get('/api/health', (req, res) => {
     success: dbReady,
     service: 'rabs-data-api',
     environment: env.nodeEnv,
+    revision: process.env.RENDER_GIT_COMMIT || null,
     ready: dbReady,
     database: {
       connected: dbReady,

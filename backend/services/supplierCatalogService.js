@@ -69,7 +69,6 @@ export const supplierOfferMatchesPackage = (packageRecord, offer) => {
     (!packageRecord.bundleType || !offer.bundleType || packageRecord.bundleType === offer.bundleType) &&
     JSON.stringify(packageRestrictions) === JSON.stringify(offerRestrictions) &&
     (!offerCode || !packageCode || offerCode === packageCode)
-    && (!offer.planId || !packageRecord.supplierOffers?.padodatagh?.planId || offer.planId === packageRecord.supplierOffers.padodatagh.planId)
   );
 };
 
@@ -132,18 +131,6 @@ export const syncSupplierOffers = async ({ supplier = 'PadodaTagh' } = {}) => {
         );
         summary.unavailable += 1;
         continue;
-      }
-      if (offer.planId) {
-        await DataPackage.updateMany(
-          {
-            'supplierOffers.padodatagh.packageCode': offer.providerPackageCode,
-            'supplierOffers.padodatagh.planId': { $nin: [offer.planId, '', null] },
-          },
-          { $set: {
-            'supplierOffers.padodatagh.lastVerifiedAt': null,
-            'supplierOffers.padodatagh.catalogVerified': false,
-          } }
-        );
       }
       const record = await findMatchingPackage({ offer });
 
