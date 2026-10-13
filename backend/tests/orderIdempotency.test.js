@@ -84,6 +84,7 @@ test('concurrent order retries persist one order and submit one supplier purchas
   let supplierPurchaseCount = 0;
   let orderAdminEventCount = 0;
   let submittedSupplierReference = null;
+  let submittedSupplierPlanId = null;
   const customerId = '64d9e76af742f8ab3f1e29d1';
   const purchaseKey = 'checkout-operation-key-0001';
   const dataPackage = {
@@ -98,10 +99,12 @@ test('concurrent order retries persist one order and submit one supplier purchas
     sellingPrice: 10,
     providerCost: 5,
     providerPackageCode: 'mtn-verified-offer',
+    providerPlanId: '427a88e6-60d9-4ecc-a944-c81cbe0e7508',
     isActive: true,
     supplierOffers: {
       padodatagh: {
         packageCode: 'mtn-verified-offer',
+        planId: '427a88e6-60d9-4ecc-a944-c81cbe0e7508',
         supplierCost: 5,
         network: 'MTN',
         volumeInMB: 1000,
@@ -178,9 +181,10 @@ test('concurrent order retries persist one order and submit one supplier purchas
       return { modifiedCount: order ? 1 : 0 };
     };
 
-    dataProvider.setMockPurchaser(async ({ reference }) => {
+    dataProvider.setMockPurchaser(async ({ reference, providerPlanId }) => {
       supplierPurchaseCount += 1;
       submittedSupplierReference = reference;
+      submittedSupplierPlanId = providerPlanId;
       return { status: 'uncertain', supplierStatus: 'uncertain', message: 'mock timeout; reconcile only' };
     });
 
@@ -213,8 +217,11 @@ test('concurrent order retries persist one order and submit one supplier purchas
     assert.equal(supplierPurchaseCount, 1);
     assert.equal(fulfillmentResults.length, 2);
     assert.equal(order.supplier, 'PadodaTagh');
+    assert.equal(order.providerPlanId, dataPackage.providerPlanId);
+    assert.equal(order.supplierOfferSnapshot.padodatagh.planId, dataPackage.providerPlanId);
     assert.equal(submittedSupplierReference, order.supplierClientReference);
     assert.equal(submittedSupplierReference, order.orderId);
+    assert.equal(submittedSupplierPlanId, dataPackage.providerPlanId);
     assert.equal(order.supplierStatus, 'uncertain');
 
     const lostResponseRetry = await invokeCreateOrder({ key: purchaseKey, customerId });

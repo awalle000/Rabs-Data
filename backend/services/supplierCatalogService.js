@@ -17,6 +17,7 @@ const PROVIDER = {
     volumeInMB: offer.volumeInMB,
     providerCost: offer.providerCost,
     providerPackageCode: offer.providerPackageCode,
+    planId: offer.planId,
     bundleType: offer.bundleType,
     restrictions: offer.restrictions,
     hasUnstructuredConditions: offer.hasUnstructuredConditions,
@@ -45,6 +46,7 @@ export const isEligiblePadodaPackage = (packageRecord, now = Date.now()) => {
     packageRecord && offer?.packageCode &&
     offer.catalogVerified === true &&
     packageRecord.providerPackageCode === offer.packageCode &&
+    (!offer.planId || packageRecord.providerPlanId === offer.planId) &&
     offer.supplierCost != null && Number.isFinite(Number(offer.supplierCost)) &&
     Number.isFinite(Number(packageRecord.providerCost)) &&
     Number(packageRecord.providerCost) === Number(offer.supplierCost) &&
@@ -67,6 +69,7 @@ export const supplierOfferMatchesPackage = (packageRecord, offer) => {
     (!packageRecord.bundleType || !offer.bundleType || packageRecord.bundleType === offer.bundleType) &&
     JSON.stringify(packageRestrictions) === JSON.stringify(offerRestrictions) &&
     (!offerCode || !packageCode || offerCode === packageCode)
+    && (!offer.planId || !packageRecord.supplierOffers?.padodatagh?.planId || offer.planId === packageRecord.supplierOffers.padodatagh.planId)
   );
 };
 
@@ -130,11 +133,23 @@ export const syncSupplierOffers = async ({ supplier = 'PadodaTagh' } = {}) => {
         summary.unavailable += 1;
         continue;
       }
+      if (offer.planId) {
+        await DataPackage.updateMany(
+          {
+            'supplierOffers.padodatagh.packageCode': offer.providerPackageCode,
+            'supplierOffers.padodatagh.planId': { $nin: [offer.planId, '', null] },
+          },
+          { $set: {
+            'supplierOffers.padodatagh.lastVerifiedAt': null,
+            'supplierOffers.padodatagh.catalogVerified': false,
+          } }
+        );
+      }
       const record = await findMatchingPackage({ offer });
 
       if (!record) {
         const supplierOffers = {
-          [provider.key]: { packageCode: offer.providerPackageCode, supplierCost: offer.providerCost, network: offer.network, volumeInMB: offer.volumeInMB, validity: offer.validity, bundleType: offer.bundleType || '', restrictions: offer.restrictions ?? null, hasUnstructuredConditions: Boolean(offer.hasUnstructuredConditions), hasValidityConflict: Boolean(offer.hasValidityConflict || offer.validity === 'Unknown'), lastVerifiedAt: verifiedAt },
+          [provider.key]: { packageCode: offer.providerPackageCode, planId: offer.planId || '', supplierCost: offer.providerCost, network: offer.network, volumeInMB: offer.volumeInMB, validity: offer.validity, bundleType: offer.bundleType || '', restrictions: offer.restrictions ?? null, hasUnstructuredConditions: Boolean(offer.hasUnstructuredConditions), hasValidityConflict: Boolean(offer.hasValidityConflict || offer.validity === 'Unknown'), lastVerifiedAt: verifiedAt },
         };
         try {
           await DataPackage.create({
@@ -148,6 +163,7 @@ export const syncSupplierOffers = async ({ supplier = 'PadodaTagh' } = {}) => {
             sellingPrice: 0,
             volumeInMB: offer.volumeInMB,
             providerPackageCode: supplier === 'PadodaTagh' ? offer.providerPackageCode : '',
+            providerPlanId: supplier === 'PadodaTagh' ? offer.planId || '' : '',
             supplierOffers,
             isActive: false,
           });
@@ -173,6 +189,7 @@ export const syncSupplierOffers = async ({ supplier = 'PadodaTagh' } = {}) => {
       }
 
       record.set(`supplierOffers.${provider.key}.packageCode`, offer.providerPackageCode);
+      record.set(`supplierOffers.${provider.key}.planId`, offer.planId || '');
       record.set(`supplierOffers.${provider.key}.supplierCost`, offer.providerCost);
       record.set(`supplierOffers.${provider.key}.network`, offer.network);
       record.set(`supplierOffers.${provider.key}.volumeInMB`, offer.volumeInMB);
@@ -187,6 +204,7 @@ export const syncSupplierOffers = async ({ supplier = 'PadodaTagh' } = {}) => {
       record.set(`supplierOffers.${provider.key}.restrictions`, offer.restrictions ?? null);
       if (supplier === 'PadodaTagh') {
         record.providerPackageCode = offer.providerPackageCode;
+        record.providerPlanId = offer.planId || '';
       }
       if (offer.unavailable) summary.unavailable += 1;
       await record.save();

@@ -3,7 +3,7 @@ import { getEnabledNetworks, getEnabledNetworkCodes } from '../config/networks.j
 import { isEligiblePadodaPackage } from '../services/supplierCatalogService.js';
 import asyncHandler from '../utils/asyncHandler.js';
 
-const CATALOG_FIELDS = '_id network name dataAmount validity bundleType restrictions sellingPrice volumeInMB providerCost providerPackageCode supplierOffers.padodatagh';
+const CATALOG_FIELDS = '_id network name dataAmount validity bundleType restrictions sellingPrice volumeInMB providerCost providerPackageCode providerPlanId supplierOffers.padodatagh';
 
 const findEligiblePackages = async (filter) => {
   const packages = await DataPackage.find(filter)
@@ -13,7 +13,7 @@ const findEligiblePackages = async (filter) => {
   return packages.filter((packageRecord) => isEligiblePadodaPackage(packageRecord));
 };
 
-const toPublicPackage = ({ providerCost, providerPackageCode, supplierOffers, __v, createdAt, updatedAt, ...packageRecord }) => packageRecord;
+const toPublicPackage = ({ providerCost, providerPackageCode, providerPlanId, supplierOffers, __v, createdAt, updatedAt, ...packageRecord }) => packageRecord;
 
 const buildNetworkCounts = (eligiblePackages) => {
   const networks = getEnabledNetworks();

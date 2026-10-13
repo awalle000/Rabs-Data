@@ -34,6 +34,7 @@ export const getAvailablePackages = async (network, supplier = 'PadodaTagh') => 
     .map((offer) => ({
       network: offer.network,
       providerPackageCode: offer.providerPackageCode,
+      providerPlanId: offer.planId,
       offerId: offer.offerId,
       name: offer.name,
       dataAmount: offer.dataAmount,
@@ -54,6 +55,7 @@ export const purchaseData = async ({
   reference,
   network,
   providerPackageCode,
+  providerPlanId,
   dataAmount,
   recipientPhone,
   volumeInMB,
@@ -62,10 +64,10 @@ export const purchaseData = async ({
   if (supplier !== 'PadodaTagh') throw retiredSupplierError();
 
   if (mockPurchaser) {
-    return mockPurchaser({ supplier, reference, network, providerPackageCode, dataAmount, recipientPhone, volumeInMB, supplierCost });
+    return mockPurchaser({ supplier, reference, network, providerPackageCode, providerPlanId, dataAmount, recipientPhone, volumeInMB, supplierCost });
   }
 
-  const result = await padodatagh.buyData({ reference, network, providerPackageCode, recipientPhone, volumeInMB, supplierCost });
+  const result = await padodatagh.buyData({ reference, network, providerPackageCode, providerPlanId, recipientPhone, volumeInMB, supplierCost });
   return {
     ...result,
     confirmedNotAccepted: false,

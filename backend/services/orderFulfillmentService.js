@@ -279,6 +279,7 @@ const submitPersistedOrder = async (order) => {
       reference: order.supplierClientReference || order.orderId,
       network: order.network,
       providerPackageCode: order.providerPackageCode,
+      providerPlanId: order.providerPlanId || order.supplierOfferSnapshot?.padodatagh?.planId,
       dataAmount: order.dataAmount,
       recipientPhone: order.recipientPhone,
       volumeInMB: order.volumeInMB,

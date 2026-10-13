@@ -29,6 +29,7 @@ const orderSchema = new mongoose.Schema(
     dataAmount: { type: String, required: true },
     validity: { type: String, required: true },
     providerPackageCode: { type: String, default: '' },
+    providerPlanId: { type: String, default: '' },
     recipientPhone: { type: String, required: true },
     volumeInMB: { type: Number },
     sellingPrice: { type: Number, required: true, min: 0 },
@@ -43,7 +44,7 @@ const orderSchema = new mongoose.Schema(
     // Supplier and live offer snapshots are fixed when the customer order is created.
     supplier: { type: String, enum: ['PadodaTagh', 'RemaData'] },
     supplierOfferSnapshot: {
-      padodatagh: { packageCode: { type: String, default: '' }, supplierCost: { type: Number, min: 0, default: null }, network: { type: String, default: '' }, volumeInMB: { type: Number, min: 1, default: null }, validity: { type: String, default: '' }, bundleType: { type: String, default: '' }, restrictions: { type: [String], default: null } },
+      padodatagh: { packageCode: { type: String, default: '' }, planId: { type: String, default: '' }, supplierCost: { type: Number, min: 0, default: null }, network: { type: String, default: '' }, volumeInMB: { type: Number, min: 1, default: null }, validity: { type: String, default: '' }, bundleType: { type: String, default: '' }, restrictions: { type: [String], default: null } },
       remadata: { packageCode: { type: String, default: '' }, supplierCost: { type: Number, min: 0, default: null }, network: { type: String, default: '' }, volumeInMB: { type: Number, min: 1, default: null }, validity: { type: String, default: '' }, bundleType: { type: String, default: '' }, restrictions: { type: [String], default: null } },
     },
     supplierCost: { type: Number, min: 0 },
@@ -60,6 +61,7 @@ const orderSchema = new mongoose.Schema(
       merchantReference: { type: String, default: null },
       phoneFormat: { type: String, default: null },
       responseBody: { type: mongoose.Schema.Types.Mixed, default: null },
+      planId: { type: String, default: null },
       durationMs: { type: Number, default: null },
       capturedAt: { type: Date, default: null },
     },
@@ -173,6 +175,7 @@ orderSchema.methods.toCustomerJSON = function () {
   delete order.grossProfit;
   delete order.netProfit;
   delete order.providerPackageCode;
+  delete order.providerPlanId;
   delete order.supplierOfferSnapshot;
   delete order.providerReference;
   delete order.refundRequired;

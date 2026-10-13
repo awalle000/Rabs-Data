@@ -175,6 +175,7 @@ export const createOrder = asyncHandler(async (req, res) => {
       volumeInMB,
       validity: dataPackage.validity,
       providerPackageCode: primaryOffer.packageCode,
+      providerPlanId: primaryOffer.planId || '',
       recipientPhone,
       sellingPrice: dataPackage.sellingPrice,
       baseProductPrice: pricing.baseProductPrice,
@@ -188,7 +189,7 @@ export const createOrder = asyncHandler(async (req, res) => {
       netProfit: profits.netProfit,
       supplier: 'PadodaTagh',
       supplierOfferSnapshot: {
-        padodatagh: { packageCode: primaryOffer.packageCode, supplierCost: primaryOffer.supplierCost, network: primaryOffer.network, volumeInMB: primaryOffer.volumeInMB, validity: primaryOffer.validity, bundleType: primaryOffer.bundleType || '', restrictions: primaryOffer.restrictions ?? null },
+        padodatagh: { packageCode: primaryOffer.packageCode, planId: primaryOffer.planId || '', supplierCost: primaryOffer.supplierCost, network: primaryOffer.network, volumeInMB: primaryOffer.volumeInMB, validity: primaryOffer.validity, bundleType: primaryOffer.bundleType || '', restrictions: primaryOffer.restrictions ?? null },
       },
       supplierCost: primaryOffer.supplierCost,
       supplierClientReference: orderId,

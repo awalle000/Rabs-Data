@@ -38,6 +38,29 @@ test('PadodaTagh offer normalization uses live offer identifiers and costs', () 
   assert.equal(offer.validity, 'Non-expiry');
 });
 
+test('offer normalization selects a valid catalog UUID and ignores malformed identifier values', () => {
+  const planId = '427a88e6-60d9-4ecc-a944-c81cbe0e7508';
+  const normalized = padoda.normalizeOffer({
+    plan_id: planId,
+    offer_id: 'not-a-uuid',
+    offer_slug: 'mtn_master_beneficiary_portal',
+    name: 'MTN 1GB', network: 'mtn', volume: 1000, price: 4.25, description: 'Non-expiry',
+  });
+  const offerIdFallback = padoda.normalizeOffer({
+    offer_id: planId,
+    offer_slug: 'mtn_master_beneficiary_portal',
+    name: 'MTN 1GB', network: 'mtn', volume: 1000, price: 4.25, description: 'Non-expiry',
+  });
+  const invalid = padoda.normalizeOffer({
+    plan_id: 'invalid-plan', offer_id: 'also-invalid', offer_slug: 'mtn_master_beneficiary_portal',
+    name: 'MTN 1GB', network: 'mtn', volume: 1000, price: 4.25, description: 'Non-expiry',
+  });
+  assert.equal(normalized.planId, planId);
+  assert.equal(offerIdFallback.planId, planId);
+  assert.equal(invalid.planId, null);
+  assert.equal(invalid.providerPackageCode, 'mtn_master_beneficiary_portal');
+});
+
 test('offer validity is conservatively parsed from both name and description', () => {
   assert.equal(padoda.normalizeOffer({ network: 'mtn', volume: 1000, price: 1, offer_slug: 'a', name: 'MTN 1GB 7 days' }).validity, '7 days');
   assert.equal(padoda.normalizeOffer({ network: 'mtn', volume: 1000, price: 1, offer_slug: 'b', name: 'MTN Standard 1GB' }).validity, 'Non-expiry');
@@ -142,6 +165,49 @@ test('PadodaTagh purchase sends the stable merchant reference and documented off
   });
 });
 
+test('purchase uses the selected live plan UUID in plan_id', async () => {
+  const planId = '427a88e6-60d9-4ecc-a944-c81cbe0e7508';
+  await withFetch(async (url, options) => {
+    assert.equal(url, 'https://padodatagh.test/api/v1/order/mtn');
+    assert.deepEqual(JSON.parse(options.body), {
+      phone: '0240000000', plan_id: planId, reference: 'RABS-PLAN-1',
+    });
+    return jsonResponse({ success: true, orderId: 'supplier-plan-1', reference: 'RABS-PLAN-1', status: 'processing' });
+  }, async () => {
+    const result = await padoda.buyData({
+      reference: 'RABS-PLAN-1', network: 'MTN', providerPackageCode: 'mtn_master_beneficiary_portal',
+      providerPlanId: planId, recipientPhone: '0240000000', volumeInMB: 1000,
+    });
+    assert.equal(result.providerReference, 'supplier-plan-1');
+  });
+});
+
+test('purchase falls back to the documented slug for invalid UUID and rejects when neither identifier is valid', async () => {
+  await withFetch(async (_url, options) => {
+    assert.deepEqual(JSON.parse(options.body), {
+      phone: '0240000000', volume: 1000, offer_slug: 'mtn_master_beneficiary_portal', reference: 'RABS-SLUG-1',
+    });
+    return jsonResponse({ success: true, orderId: 'supplier-slug-1', reference: 'RABS-SLUG-1', status: 'processing' });
+  }, async () => {
+    await padoda.buyData({
+      reference: 'RABS-SLUG-1', network: 'MTN', providerPackageCode: 'mtn_master_beneficiary_portal',
+      providerPlanId: 'not-a-uuid', recipientPhone: '0240000000', volumeInMB: 1000,
+    });
+  });
+
+  let requests = 0;
+  await withFetch(async () => { requests += 1; throw new Error('invalid identifiers must not be sent'); }, async () => {
+    await assert.rejects(
+      padoda.buyData({
+        reference: 'RABS-NO-ID', network: 'MTN', providerPackageCode: '', providerPlanId: 'not-a-uuid',
+        recipientPhone: '0240000000', volumeInMB: 1000,
+      }),
+      (error) => error.code === 'PADODATAGH_INVALID_PURCHASE' && error.notSent === true
+    );
+  });
+  assert.equal(requests, 0);
+});
+
 test('only a documented HTTP rejection with a parsed explicit failure is classified as non-acceptance', async () => {
   await withFetch(async () => jsonResponse({ success: false, message: 'Insufficient balance' }, 402), async () => {
     await assert.rejects(
@@ -206,6 +272,7 @@ test('ambiguous purchase 404 captures safe request metadata and redacts supplier
         assert.equal(error.supplierDiagnostics.method, 'POST');
         assert.equal(error.supplierDiagnostics.url, 'https://padodatagh.test/api/v1/order/mtn');
         assert.equal(error.supplierDiagnostics.offerSlug, 'mtn-master-offer');
+        assert.equal(error.supplierDiagnostics.planId, null);
         assert.equal(error.supplierDiagnostics.volume, 1000);
         assert.equal(error.supplierDiagnostics.merchantReference, 'DH-INCIDENT-123');
         assert.equal(error.supplierDiagnostics.phoneFormat, 'Ghana-local-10-digit');

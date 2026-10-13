@@ -15,9 +15,11 @@ const dataPackageSchema = new mongoose.Schema(
     volumeInMB: { type: Number, min: 1 },
     // The code the data provider uses for this bundle. Filled in once the provider is integrated.
     providerPackageCode: { type: String, trim: true, default: '' },
+    providerPlanId: { type: String, trim: true, default: '' },
     supplierOffers: {
       padodatagh: {
         packageCode: { type: String, trim: true, default: '' },
+        planId: { type: String, trim: true, default: '' },
         supplierCost: { type: Number, min: 0, default: null },
         network: { type: String, default: '' },
         volumeInMB: { type: Number, min: 1, default: null },

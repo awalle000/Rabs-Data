@@ -3,9 +3,11 @@ import AppError from '../utils/AppError.js';
 import { normalizePhone } from '../utils/validators.js';
 
 const NETWORKS = new Set(['mtn', 'telecel', 'at']);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DOCUMENTED_REJECTION_CODES = new Set([400, 401, 402]);
 
 export const isConfigured = () => Boolean(env.padodatagh.apiKey && env.padodatagh.baseUrl);
+export const isValidPlanId = (value) => typeof value === 'string' && UUID.test(value);
 
 export const toPadodaNetwork = (network) => {
   const value = String(network || '').trim().toLowerCase();
@@ -28,6 +30,7 @@ export const normalizeOffer = (offer) => {
   const volumeInMB = Number(offer.volume);
   const cost = Number(offer.price);
   const providerPackageCode = String(offer.offer_slug || '').trim();
+  const planId = [offer.plan_id, offer.offer_id].find(isValidPlanId) || null;
   if (!network || !volumeInMB || !Number.isFinite(volumeInMB) || volumeInMB <= 0 || !Number.isFinite(cost) || cost < 0 || !providerPackageCode) {
     return null;
   }
@@ -52,6 +55,7 @@ export const normalizeOffer = (offer) => {
 
   return {
     offerId: String(offer.offer_id || ''),
+    planId,
     providerPackageCode,
     network,
     name: String(offer.name || `${dataAmount} ${network}`),
@@ -105,7 +109,7 @@ const safeRequestTarget = (rawUrl) => {
   }
 };
 
-const request = async (path, { method = 'GET', body, purchase = false } = {}) => {
+const request = async (path, { method = 'GET', body, purchase = false, catalogVolume = null } = {}) => {
   if (!isConfigured()) {
     const error = new AppError('PadodaTagh is not configured. Set PADODATAGH_API_KEY on the backend.', 503, 'PADODATAGH_NOT_CONFIGURED');
     error.notSent = true;
@@ -139,7 +143,9 @@ const request = async (path, { method = 'GET', body, purchase = false } = {}) =>
         url: safeRequestTarget(requestUrl),
         requestFields: body && typeof body === 'object' ? Object.keys(body) : [],
         offerSlug: typeof body?.offer_slug === 'string' ? body.offer_slug.slice(0, 100) : null,
-        volume: Number.isFinite(Number(body?.volume)) ? Number(body.volume) : null,
+        planId: typeof body?.plan_id === 'string' && isValidPlanId(body.plan_id) ? body.plan_id : null,
+        planId: typeof body?.plan_id === 'string' && isValidPlanId(body.plan_id) ? body.plan_id : null,
+        volume: Number.isFinite(Number(body?.volume ?? catalogVolume)) ? Number(body?.volume ?? catalogVolume) : null,
         merchantReference: typeof body?.reference === 'string' ? body.reference.slice(0, 128) : null,
         phoneFormat: typeof body?.phone === 'string' && /^0\d{9}$/.test(body.phone) ? 'Ghana-local-10-digit' : null,
         responseBody: summarizeSupplierErrorBody(data),
@@ -195,11 +201,13 @@ export const getBalance = async () => {
   return { balance, currency: String(data.data.currency || 'GHS'), updatedAt: data.data.updated_at || null, responseTimeMs };
 };
 
-export const buyData = async ({ reference, network, providerPackageCode, recipientPhone, volumeInMB, supplierCost }) => {
+export const buyData = async ({ reference, network, providerPackageCode, providerPlanId, recipientPhone, volumeInMB, supplierCost }) => {
   const phone = normalizePhone(recipientPhone);
   const supplierNetwork = toPadodaNetwork(network);
   const volume = Number(volumeInMB);
-  if (!phone || !NETWORKS.has(supplierNetwork) || !providerPackageCode || !Number.isFinite(volume) || volume <= 0 || !reference) {
+  const planId = isValidPlanId(providerPlanId) ? providerPlanId : null;
+  const offerSlug = typeof providerPackageCode === 'string' ? providerPackageCode.trim() : '';
+  if (!phone || !NETWORKS.has(supplierNetwork) || (!planId && !offerSlug) || !Number.isFinite(volume) || volume <= 0 || !reference) {
     const error = new AppError('PadodaTagh purchase details are incomplete or invalid.', 400, 'PADODATAGH_INVALID_PURCHASE');
     error.notSent = true;
     throw error;
@@ -208,7 +216,8 @@ export const buyData = async ({ reference, network, providerPackageCode, recipie
   const { data, responseTimeMs } = await request(`/order/${supplierNetwork}`, {
     method: 'POST',
     purchase: true,
-    body: { phone, volume, offer_slug: providerPackageCode, reference: String(reference) },
+    catalogVolume: volume,
+    body: { phone, ...(planId ? { plan_id: planId } : { volume, offer_slug: offerSlug }), reference: String(reference) },
   });
   const order = data.data && typeof data.data === 'object' ? data.data : data;
   const status = String(order.status || '').toLowerCase();

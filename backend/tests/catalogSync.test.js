@@ -170,6 +170,21 @@ test('checkout requires a fresh current PadodaTagh slug, cost, price and verifie
   assert.equal(isEligiblePadodaPackage({ ...packageRecord, supplierOffers: { padodatagh: { ...packageRecord.supplierOffers.padodatagh, catalogVerified: undefined } } }), false);
 });
 
+test('checkout requires the catalog UUID to match when the supplier supplies a plan ID', () => {
+  const planId = '427a88e6-60d9-4ecc-a944-c81cbe0e7508';
+  const packageRecord = {
+    network: 'MTN', volumeInMB: 1000, validity: 'Non-expiry', bundleType: '', restrictions: [],
+    providerPackageCode: 'mtn_master_beneficiary_portal', providerPlanId: planId, providerCost: 4.25, sellingPrice: 5,
+    supplierOffers: { padodatagh: {
+      packageCode: 'mtn_master_beneficiary_portal', planId, supplierCost: 4.25, network: 'MTN', volumeInMB: 1000,
+      validity: 'Non-expiry', bundleType: '', restrictions: [], catalogVerified: true, lastVerifiedAt: new Date(),
+    } },
+  };
+  assert.equal(isEligiblePadodaPackage(packageRecord), true);
+  assert.equal(isEligiblePadodaPackage({ ...packageRecord, providerPlanId: 'a1b2c3d4-e5f6-47a8-b9c0-112233445566' }), false);
+  assert.equal(isEligiblePadodaPackage({ ...packageRecord, providerPlanId: '' }), false);
+});
+
 test('catalog sync invalidates ambiguous existing offers without changing prices or historical orders', async () => {
   const originals = {
     dataFind: DataPackage.find,
@@ -260,8 +275,8 @@ test('successful clean refresh verifies the existing package without changing re
   const existing = {
     _id: 'clean-package', network: 'Telecel', volumeInMB: 1000, validity: 'Non-expiry',
     name: 'Telecel Standard 1GB', dataAmount: '1GB', bundleType: '', restrictions: [],
-    isActive: true, sellingPrice: 9.75, providerCost: 3.5, providerPackageCode: 'telecel-standard',
-    supplierOffers: { padodatagh: { packageCode: 'telecel-standard', supplierCost: 3.5, network: 'Telecel', volumeInMB: 1000, validity: 'Non-expiry', restrictions: [], catalogVerified: true, lastVerifiedAt: new Date(Date.now() - 31 * 60 * 1000) } },
+    isActive: true, sellingPrice: 9.75, providerCost: 3.5, providerPackageCode: 'telecel-standard', providerPlanId: '',
+    supplierOffers: { padodatagh: { packageCode: 'telecel-standard', planId: '', supplierCost: 3.5, network: 'Telecel', volumeInMB: 1000, validity: 'Non-expiry', restrictions: [], catalogVerified: true, lastVerifiedAt: new Date(Date.now() - 31 * 60 * 1000) } },
     set(path, value) { this.supplierOffers.padodatagh[path.split('.').at(-1)] = value; },
     async save() { this.saved = true; },
   };
@@ -280,7 +295,7 @@ test('successful clean refresh verifies the existing package without changing re
   };
   SupplierControl.findOneAndUpdate = async () => ({});
   globalThis.fetch = async () => new Response(JSON.stringify({ success: true, data: [
-    { offer_slug: 'telecel-standard', name: 'Standard 1GB Non-expiry', network: 'telecel', volume: 1000, price: 3.5, restrictions: [] },
+    { plan_id: '427a88e6-60d9-4ecc-a944-c81cbe0e7508', offer_id: '427a88e6-60d9-4ecc-a944-c81cbe0e7508', offer_slug: 'telecel-standard', name: 'Standard 1GB Non-expiry', network: 'telecel', volume: 1000, price: 3.5, restrictions: [] },
   ] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
   try {
@@ -293,6 +308,8 @@ test('successful clean refresh verifies the existing package without changing re
     assert.ok(existing.supplierOffers.padodatagh.lastVerifiedAt instanceof Date);
     assert.equal(existing.sellingPrice, 9.75);
     assert.equal(existing.providerCost, 3.5);
+    assert.equal(existing.providerPlanId, '427a88e6-60d9-4ecc-a944-c81cbe0e7508');
+    assert.equal(existing.supplierOffers.padodatagh.planId, '427a88e6-60d9-4ecc-a944-c81cbe0e7508');
     assert.equal(existing.isActive, true);
     assert.equal(isEligiblePadodaPackage(existing), true);
   } finally {
