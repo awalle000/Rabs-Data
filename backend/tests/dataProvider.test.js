@@ -105,3 +105,64 @@ test('supplier status with a mismatched known supplier ID remains uncertain', as
     assert.equal(result.supplierStatus, 'uncertain');
   });
 });
+
+test('completed supplier status is accepted when the queried supplier UUID matches despite a different client-reference format', async () => {
+  const supplierReference = 'fda7db3c-9fe9-41c3-9b44-35cc6fcf9ef9';
+  let requests = 0;
+  await withFetch(async (url, options) => {
+    requests += 1;
+    assert.equal(url, `https://padodatagh.test/api/v1/order/status/${supplierReference}`);
+    assert.equal(options.method, 'GET');
+    assert.equal(options.body, undefined);
+    return jsonResponse({ success: true, data: {
+      orderId: supplierReference, reference: 'ORD-1694477', status: 'completed',
+    } });
+  }, async () => {
+    const result = await dataProvider.checkTransactionStatus({
+      supplier: 'PadodaTagh', reference: 'DH-20261014-000001', providerReference: supplierReference,
+    });
+    assert.equal(result.status, 'successful');
+    assert.equal(result.supplierStatus, 'completed');
+    assert.equal(result.providerReference, supplierReference);
+    assert.equal(result.clientReference, 'ORD-1694477');
+  });
+  assert.equal(requests, 1);
+});
+
+test('pending supplier status remains nonterminal and unknown or malformed responses remain uncertain', async () => {
+  for (const { response, expectedStatus, expectedSupplierStatus } of [
+    { response: jsonResponse({ success: true, data: { orderId: 'supplier-order-3', reference: 'DH-EXPECTED-3', status: 'pending' } }), expectedStatus: 'uncertain' },
+    { response: jsonResponse({ success: true, data: { orderId: 'supplier-order-3', reference: 'DH-EXPECTED-3', status: 'delivered-ish' } }), expectedStatus: 'uncertain' },
+    { response: jsonResponse({ success: true, data: { orderId: 'supplier-order-3', reference: 'DH-EXPECTED-3' } }), expectedStatus: 'uncertain' },
+    { response: jsonResponse({ success: false, message: 'not found' }), expectedStatus: 'uncertain' },
+    { response: new Response('{', { status: 200, headers: { 'Content-Type': 'application/json' } }), expectedStatus: 'uncertain' },
+  ]) {
+    await withFetch(async (_url, options) => {
+      assert.equal(options.method, 'GET');
+      return response;
+    }, async () => {
+      const result = await dataProvider.checkTransactionStatus({
+        supplier: 'PadodaTagh', reference: 'DH-EXPECTED-3', providerReference: 'supplier-order-3',
+      });
+      assert.notEqual(result.status, 'successful');
+      assert.equal(result.status, expectedStatus);
+      if (expectedSupplierStatus) assert.equal(result.supplierStatus, expectedSupplierStatus);
+    });
+  }
+});
+
+test('supplier status lookup failures are uncertain and never trigger a purchase request', async () => {
+  let requests = 0;
+  await withFetch(async (_url, options) => {
+    requests += 1;
+    assert.equal(options.method, 'GET');
+    return jsonResponse({ success: false, message: 'supplier unavailable' }, 503);
+  }, async () => {
+    const result = await dataProvider.checkTransactionStatus({
+      supplier: 'PadodaTagh', reference: 'DH-EXPECTED-4', providerReference: 'supplier-order-4',
+    });
+    assert.equal(result.status, 'uncertain');
+    assert.equal(result.supplierStatus, 'uncertain');
+  });
+  assert.equal(requests, 1);
+});

@@ -79,7 +79,7 @@ const validateSupplierStatusIdentity = (result, reference, providerReference) =>
   const returnedSupplierReference = String(result?.providerReference || '');
   const supplierReferenceMatches = Boolean(returnedSupplierReference)
     && (!providerReference || returnedSupplierReference === String(providerReference));
-  if (clientReferenceMatches && supplierReferenceMatches) return result;
+  if (supplierReferenceMatches && (clientReferenceMatches || Boolean(providerReference))) return result;
 
   return {
     status: 'uncertain',

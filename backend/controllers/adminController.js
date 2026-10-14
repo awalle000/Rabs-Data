@@ -13,7 +13,7 @@ import asyncHandler from '../utils/asyncHandler.js';
 import { roundMoney } from '../utils/money.js';
 import { getPagination, buildMeta } from '../utils/pagination.js';
 import { getOrCreateWallet } from '../services/walletService.js';
-import { getPublicSupplierStatus, getSupplierControl, updateSupplierControl, recordSupplierHealth } from '../services/supplierControlService.js';
+import { getPublicSupplierStatus, getSupplierControl, updateSupplierControl, recordSupplierEvent, recordSupplierHealth } from '../services/supplierControlService.js';
 import { getSupplierCatalogStatus, syncSupplierOffers } from '../services/supplierCatalogService.js';
 import { isExplicitPadodaTaghOrder } from '../utils/supplierPolicies.js';
 
@@ -446,6 +446,11 @@ export const checkOrderSupplierStatus = asyncHandler(async (req, res) => {
     supplier: 'PadodaTagh',
     reference: order.orderId,
     providerReference: order.providerReference || order.supplierReference,
+  });
+
+  await recordSupplierEvent('padodatagh', check.status === 'successful' ? 'delivered' : check.status === 'failed' ? 'failed' : 'pending', {
+    status: check.supplierStatus,
+    message: 'Admin-triggered supplier status check completed.',
   });
 
   let updated;

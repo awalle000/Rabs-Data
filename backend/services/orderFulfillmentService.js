@@ -213,6 +213,14 @@ export const applyProviderResult = async (order, result, { allowFailedPaidDirect
   };
 
   if (result.status === 'successful' || supplierStatus === 'completed') {
+    if (order.status === 'successful') {
+      await Order.updateOne(
+        { _id: order._id, status: 'successful' },
+        { $set: { ...baseUpdates, needsReview: false, refundRequired: false }, $unset: { failureReason: 1 } }
+      );
+      return Order.findById(order._id);
+    }
+
     const updated = await Order.findOneAndUpdate(
       { _id: order._id, status: applicableStatuses },
       {
@@ -224,6 +232,7 @@ export const applyProviderResult = async (order, result, { allowFailedPaidDirect
           needsReview: false,
           refundRequired: false,
         },
+        $unset: { failureReason: 1 },
       },
       { returnDocument: 'after' }
     );

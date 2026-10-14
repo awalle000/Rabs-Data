@@ -175,31 +175,81 @@ test('queued work is retried after a pre-send database failure', async () => {
 
 test('delivery SMS requires a processing or paid order transition to successful', async () => {
   const harness = createHarness();
-  const originals = { findOneAndUpdate: Order.findOneAndUpdate, findById: Order.findById, transactionUpdateOne: Transaction.updateOne };
+  const originals = { findOneAndUpdate: Order.findOneAndUpdate, findById: Order.findById, updateOne: Order.updateOne, transactionUpdateOne: Transaction.updateOne };
+  const supplierLedgerEntries = new Map();
   const order = {
     _id: 'order-1', orderId: 'DH-1', status: 'payment_pending', dataAmount: '1GB', network: 'MTN',
-    recipientPhone: '0241234567', contactPhone: '0241234567', sellingPrice: 10, providerCost: 5,
+    recipientPhone: '0241234567', contactPhone: '0241234567', sellingPrice: 10, customerChargedAmount: 10,
+    providerCost: 5, supplierCost: 5, supplierReference: 'supplier-order-1', providerReference: 'supplier-order-1',
+    supplierStatus: 'pending', paymentStatus: 'paid', paymentReference: 'PAY-1', needsReview: true,
+    failureReason: 'Supplier status remains uncertain.',
   };
   Order.findOneAndUpdate = async (filter, update) => {
     if (!filter.status.$in.includes(order.status)) return null;
     Object.assign(order, update.$set);
+    for (const field of Object.keys(update.$unset || {})) delete order[field];
     return order;
   };
   Order.findById = async () => order;
-  Transaction.updateOne = async () => ({ upsertedCount: 1 });
+  Order.updateOne = async (_filter, update) => {
+    Object.assign(order, update.$set);
+    for (const field of Object.keys(update.$unset || {})) delete order[field];
+    return { modifiedCount: 1 };
+  };
+  Transaction.updateOne = async (filter, update) => {
+    const entry = update.$setOnInsert;
+    if (!supplierLedgerEntries.has(entry.operationKey)) supplierLedgerEntries.set(entry.operationKey, entry);
+    return { upsertedCount: supplierLedgerEntries.size };
+  };
   try {
     const result = await fulfillment.applyProviderResult(order, { status: 'successful', supplierStatus: 'completed' });
     assert.equal(result.status, 'payment_pending');
     assert.equal(harness.records.size, 0);
 
     order.status = 'processing';
-    const delivered = await fulfillment.applyProviderResult(order, { status: 'successful', supplierStatus: 'completed' });
+    order.completedAt = undefined;
+    const pending = await fulfillment.applyProviderResult(order, { status: 'processing', supplierStatus: 'pending' });
+    assert.equal(pending.status, 'processing');
+    assert.equal(pending.supplierStatus, 'pending');
+    assert.equal(pending.completedAt, undefined);
+    assert.equal(supplierLedgerEntries.size, 0);
+
+    order.status = 'processing';
+    order.needsReview = true;
+    const completedAtBefore = order.completedAt;
+    const delivered = await fulfillment.applyProviderResult(order, {
+      status: 'successful', supplierStatus: 'completed', providerReference: 'supplier-order-1', supplierCost: 5,
+    });
     assert.equal(delivered.status, 'successful');
+    assert.equal(delivered.supplierStatus, 'completed');
+    assert.equal(delivered.supplierReference, 'supplier-order-1');
+    assert.ok(delivered.completedAt instanceof Date);
+    assert.ok(delivered.supplierCompletedAt instanceof Date);
+    assert.equal(delivered.needsReview, false);
+    assert.equal(delivered.failureReason, undefined);
+    assert.equal(delivered.paymentStatus, 'paid');
+    assert.equal(delivered.paymentReference, 'PAY-1');
+    assert.equal(delivered.sellingPrice, 10);
+    assert.equal(delivered.customerChargedAmount, 10);
+    assert.ok(delivered.completedAt > (completedAtBefore || new Date(0)));
+    assert.equal(supplierLedgerEntries.size, 1);
+    assert.equal([...supplierLedgerEntries.values()][0].type, 'provider_purchase');
+    assert.equal([...supplierLedgerEntries.values()][0].operationKey, 'supplier-order:order-1');
     assert.equal(harness.records.size, 1);
     assert.equal([...harness.records.values()][0].eventKey, 'order-delivered:order-1');
+
+    const repeated = await fulfillment.applyProviderResult(delivered, {
+      status: 'successful', supplierStatus: 'completed', providerReference: 'supplier-order-1', supplierCost: 5,
+    });
+    assert.equal(repeated.status, 'successful');
+    assert.equal(repeated.completedAt, delivered.completedAt);
+    assert.equal(supplierLedgerEntries.size, 1);
+    assert.equal(delivered.completedAt, repeated.completedAt);
+    assert.equal(harness.records.size, 1);
   } finally {
     Order.findOneAndUpdate = originals.findOneAndUpdate;
     Order.findById = originals.findById;
+    Order.updateOne = originals.updateOne;
     Transaction.updateOne = originals.transactionUpdateOne;
     harness.restore();
   }
