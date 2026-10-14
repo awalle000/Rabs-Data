@@ -18,6 +18,9 @@ export const changePassword = asyncHandler(async (req, res) => {
   const { currentPassword, newPassword } = req.body;
 
   const user = await User.findById(req.user._id).select('+password +tokenVersion');
+  if (!user || !user.isActive) {
+    throw new AppError('Account not found or deactivated', 401);
+  }
   if (!(await user.comparePassword(currentPassword))) {
     throw new AppError('Current password is incorrect', 400);
   }

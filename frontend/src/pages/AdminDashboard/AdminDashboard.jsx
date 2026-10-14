@@ -1,9 +1,14 @@
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext.jsx';
 import useAsync from '../../hooks/useAsync.js';
 import { getDashboard } from '../../services/adminService.js';
+import { changePassword } from '../../services/authService.js';
 import { formatCurrency } from '../../utils/formatCurrency.js';
 import { formatDate } from '../../utils/formatDate.js';
 import { buyerLabel } from '../../utils/adminFormat.js';
+import { validatePassword } from '../../utils/validators.js';
+import { getErrorMessage } from '../../utils/errors.js';
 import StatsCard from '../../components/StatsCard/StatsCard.jsx';
 import TransactionTable from '../../components/TransactionTable/TransactionTable.jsx';
 import OrderStatus from '../../components/OrderStatus/OrderStatus.jsx';
@@ -24,7 +29,39 @@ const COLUMNS = [
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
+  const { logout } = useAuth();
   const { data, loading, error, reload } = useAsync(getDashboard, []);
+  const [passwords, setPasswords] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [passwordErrors, setPasswordErrors] = useState({});
+  const [passwordMessage, setPasswordMessage] = useState(null);
+  const [showPasswords, setShowPasswords] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
+
+  const submitPasswordChange = async (event) => {
+    event.preventDefault();
+    setPasswordMessage(null);
+    const errors = {
+      currentPassword: passwords.currentPassword ? '' : 'Enter your current password',
+      newPassword: validatePassword(passwords.newPassword),
+      confirmPassword: !passwords.confirmPassword
+        ? 'Confirm your new password'
+        : passwords.newPassword !== passwords.confirmPassword ? 'Passwords do not match' : '',
+    };
+    setPasswordErrors(errors);
+    if (Object.values(errors).some(Boolean)) return;
+
+    setChangingPassword(true);
+    try {
+      await changePassword(passwords);
+      setPasswords({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      logout();
+      navigate('/login', { replace: true, state: { passwordChanged: true } });
+    } catch (caught) {
+      setPasswordMessage({ type: 'error', text: getErrorMessage(caught) });
+    } finally {
+      setChangingPassword(false);
+    }
+  };
 
   if (loading && !data) return <Loader label="Loading dashboard..." />;
   if (error) return <Alert onRetry={reload}>{error}</Alert>;
@@ -34,6 +71,41 @@ export default function AdminDashboard() {
   return (
     <div className="dash">
       <AdminPushSettings />
+      <form className="card admin-password" onSubmit={submitPasswordChange} noValidate>
+        <h2>Change Password</h2>
+        {passwordMessage && <Alert type={passwordMessage.type}>{passwordMessage.text}</Alert>}
+        {['currentPassword', 'newPassword', 'confirmPassword'].map((field) => {
+          const labels = {
+            currentPassword: ['Current password', 'current-password'],
+            newPassword: ['New password', 'new-password'],
+            confirmPassword: ['Confirm new password', 'new-password'],
+          };
+          const [label, autoComplete] = labels[field];
+          return (
+            <div className="field" key={field}>
+              <label className="field__label" htmlFor={`admin-${field}`}>{label}</label>
+              <input
+                id={`admin-${field}`}
+                type={showPasswords ? 'text' : 'password'}
+                className="field__control"
+                autoComplete={autoComplete}
+                value={passwords[field]}
+                onChange={(event) => setPasswords((current) => ({ ...current, [field]: event.target.value }))}
+                aria-invalid={passwordErrors[field] ? 'true' : 'false'}
+                disabled={changingPassword}
+              />
+              {passwordErrors[field] && <span className="field__error" role="alert">{passwordErrors[field]}</span>}
+            </div>
+          );
+        })}
+        <label className="auth__show">
+          <input type="checkbox" checked={showPasswords} onChange={(event) => setShowPasswords(event.target.checked)} disabled={changingPassword} />{' '}
+          Show passwords
+        </label>
+        <button type="submit" className="btn btn--primary" disabled={changingPassword}>
+          {changingPassword ? 'Changing password...' : 'Change Password'}
+        </button>
+      </form>
       {stats.ordersNeedingReview > 0 && (
         <Alert type="warning" title={`${stats.ordersNeedingReview} order(s) need manual review`}>
           Delivery status is unknown or a refund failed. <Link to="/admin/orders?review=1">Review them now</Link>

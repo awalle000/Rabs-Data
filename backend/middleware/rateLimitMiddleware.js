@@ -53,6 +53,12 @@ export const resetPasswordLimiter = build({
   message: 'Too many password reset attempts. Please try again in 15 minutes.',
 });
 
+export const passwordChangeLimiter = build({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  message: 'Too many password change attempts. Please try again in 15 minutes.',
+});
+
 export const webhookLimiter = build({
   windowMs: 60 * 1000,
   limit: 120,

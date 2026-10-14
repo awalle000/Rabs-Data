@@ -41,6 +41,9 @@ const phoneField = (field, { optional = false } = {}) => {
 
 const passwordField = (field) =>
   body(field)
+    .isString()
+    .withMessage('Password must be a string')
+    .bail()
     .isLength({ min: 8, max: 72 })
     .withMessage('Password must be 8 to 72 characters')
     .matches(/[A-Za-z]/)
@@ -115,8 +118,17 @@ export const profileRules = [
 ];
 
 export const changePasswordRules = [
-  body('currentPassword').notEmpty().withMessage('Current password is required'),
+  body('currentPassword').isString().withMessage('Current password is required').bail()
+    .notEmpty().withMessage('Current password is required'),
   passwordField('newPassword'),
+  body('confirmPassword')
+    .isString()
+    .withMessage('Password confirmation is required')
+    .bail()
+    .custom((value, { req }) => {
+      if (value !== req.body.newPassword) throw new Error('Passwords do not match');
+      return true;
+    }),
 ];
 
 /* ------------------------------ Orders ------------------------------ */

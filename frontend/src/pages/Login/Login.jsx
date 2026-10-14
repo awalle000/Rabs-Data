@@ -64,6 +64,9 @@ export default function Login() {
       {loading && <Loader label={waitingLabel} />}
 
       <form className="card" onSubmit={handleSubmit} noValidate>
+        {location.state?.passwordChanged && (
+          <Alert type="success">Password changed. Sign in with your new password.</Alert>
+        )}
         {apiError && <Alert>{apiError}</Alert>}
 
         <div className="field">
