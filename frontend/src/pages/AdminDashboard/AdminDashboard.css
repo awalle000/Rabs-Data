@@ -3,9 +3,37 @@
   gap: 1.25rem;
 }
 
+.admin-password {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(130px, 1fr)) auto auto;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.admin-password h2 {
+  grid-column: 1 / -1;
+  margin-bottom: 0;
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+}
+
+.admin-password .field {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.admin-password .auth__show,
+.admin-password button {
+  white-space: nowrap;
+}
+
+.admin-password .auth__show {
+  align-self: center;
+}
+
 .dash__stats {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(230px, 100%), 1fr));
   gap: 0.9rem;
 }
 
@@ -18,5 +46,22 @@
 
 .dash__recent-head h2 {
   margin: 0;
-  font-size: 1.1rem;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 600;
+}
+
+@media (max-width: 680px) {
+  .admin-password {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .admin-password h2 {
+    grid-column: auto;
+  }
+
+  .admin-password .auth__show {
+    justify-self: start;
+  }
 }

@@ -1,8 +1,8 @@
 .footer {
   margin-top: 2rem;
-  padding-top: 2rem;
-  background: #0f172a;
-  color: #cbd5e1;
+  padding-top: 2.5rem;
+  background: #142a21;
+  color: #d4e0d8;
 }
 
 .footer__inner {
@@ -13,7 +13,8 @@
 
 .footer__brand {
   color: #fff;
-  font-size: 1.2rem;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
 }
 
 .footer__text {
@@ -29,7 +30,13 @@
 }
 
 .footer a {
-  color: #cbd5e1;
+  color: #d4e0d8;
+  text-decoration-color: rgba(212, 224, 216, 0.45);
+  text-underline-offset: 3px;
+}
+
+.footer a:hover {
+  color: #fff;
 }
 
 .footer__contact {
@@ -41,7 +48,7 @@
 .footer__copy {
   margin: 1.5rem auto 0;
   padding-block: 1rem;
-  border-top: 1px solid #1e293b;
+  border-top: 1px solid #2c4337;
   font-size: 0.85rem;
 }
 
@@ -55,5 +62,5 @@
   margin: 0 auto;
   padding-bottom: 1.25rem;
   font-size: 0.8rem;
-  color: #94a3b8;
+  color: #a9bbb0;
 }

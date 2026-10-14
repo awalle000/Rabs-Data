@@ -56,20 +56,46 @@ export default function Home() {
     <>
       <section className="hero">
         <div className="container hero__inner">
-          <p className="hero__eyebrow">Mobile data for Ghana</p>
-          <h1 className="hero__title">Buy mobile data in seconds. No account needed.</h1>
-          <p className="hero__text">
-            Pick a network, choose a bundle, enter a number and pay. We deliver the data once your payment is
-            confirmed.
-          </p>
-          <div className="hero__actions">
-            <Link to="/buy" className="btn btn--primary btn--lg">
-              Buy Data
-            </Link>
-            <Link to="/track" className="btn btn--ghost btn--lg hero__secondary">
-              Track an order
-            </Link>
+          <div className="hero__copy">
+            <p className="hero__eyebrow">Mobile data for Ghana</p>
+            <h1 className="hero__title">Mobile data, without the runaround.</h1>
+            <p className="hero__text">
+              Choose your network and bundle, add a recipient number, then pay. Delivery starts after your payment is
+              confirmed.
+            </p>
+            <div className="hero__actions">
+              <Link to="/buy" className="btn btn--primary btn--lg">
+                Buy Data
+              </Link>
+              <Link to="/track" className="btn btn--ghost btn--lg hero__secondary">
+                Track an order
+              </Link>
+            </div>
           </div>
+          <aside className="hero__visual" aria-label="Available networks">
+            <div className="hero__visual-heading">
+              <span className="hero__visual-kicker">Your choice</span>
+              <strong>Pick a network</strong>
+            </div>
+            {data?.networks?.length ? (
+              <ul className="hero__network-list">
+                {data.networks.slice(0, 3).map((network) => (
+                  <li key={network.code} className="hero__network-item">
+                    <NetworkLogo network={network.code} size="md" />
+                    <span>
+                      <strong>{network.label}</strong>
+                      <small>{network.packageCount} available bundles</small>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="hero__visual-empty">Available network choices appear here when the catalog loads.</p>
+            )}
+            <Link to="/buy" className="hero__visual-link">
+              Browse all bundles <span aria-hidden="true">&rarr;</span>
+            </Link>
+          </aside>
         </div>
       </section>
 

@@ -36,6 +36,7 @@ export default function Navbar() {
   };
 
   const menuLinks = [
+    { to: '/', label: 'Home' },
     { to: '/buy', label: 'Buy Data' },
     { to: '/track', label: 'Track Order' },
     ...(user ? [{ to: '/orders', label: 'My Orders' }, { to: '/wallet', label: 'Wallet' }] : []),
@@ -52,7 +53,7 @@ export default function Navbar() {
 
           <nav className="navbar__links" aria-label="Main">
             {menuLinks.map((item) => (
-              <NavLink key={item.to} to={item.to} className={linkClass}>
+              <NavLink key={item.to} to={item.to} end={item.to === '/'} className={linkClass}>
                 {item.label}
               </NavLink>
             ))}
@@ -108,7 +109,7 @@ export default function Navbar() {
         <div id="mobile-menu" className={`navbar__mobile${menuOpen ? ' is-open' : ''}`} aria-label="Mobile menu">
           <nav className="navbar__mobile-menu" aria-label="Mobile menu">
             {menuLinks.map((item) => (
-              <NavLink key={item.to} to={item.to} className={({ isActive }) => `navbar__mobile-link${isActive ? ' navbar__mobile-link--active' : ''}`}>
+              <NavLink key={item.to} to={item.to} end={item.to === '/'} className={({ isActive }) => `navbar__mobile-link${isActive ? ' navbar__mobile-link--active' : ''}`}>
                 {item.label}
               </NavLink>
             ))}

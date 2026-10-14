@@ -30,6 +30,7 @@ const COLUMNS = [
   { key: 'data', label: 'Bundle', render: (order) => `${order.dataAmount} (${order.network})` },
   { key: 'sellingPrice', label: 'Selling Price', align: 'right', render: (order) => formatCurrency(order.baseProductPrice || order.sellingPrice) },
   { key: 'customerChargedAmount', label: 'Customer Charged', align: 'right', render: (order) => formatCurrency(order.customerChargedAmount || order.sellingPrice) },
+  { key: 'status', label: 'Overall Status', render: (order) => <OrderStatus status={order.status} /> },
   {
     key: 'paymentStatus',
     label: 'Payment Status',

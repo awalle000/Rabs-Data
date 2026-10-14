@@ -1,5 +1,14 @@
 .auth {
   max-width: 460px;
+  padding-top: 2.5rem;
+}
+
+.auth > .card {
+  box-shadow: 0 14px 34px rgba(20, 48, 34, 0.08);
+}
+
+.auth .btn--block {
+  margin-top: 0.35rem;
 }
 
 .auth__show {

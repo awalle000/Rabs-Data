@@ -71,6 +71,30 @@ export default function AdminDashboard() {
   return (
     <div className="dash">
       <AdminPushSettings />
+      {stats.ordersNeedingReview > 0 && (
+        <Alert type="warning" title={`${stats.ordersNeedingReview} order(s) need manual review`}>
+          Delivery status is unknown or a refund failed. <Link to="/admin/orders?review=1">Review them now</Link>
+        </Alert>
+      )}
+
+      <div className="dash__stats">
+        <StatsCard
+          label="PadodaTagh Wallet"
+          value={stats.supplierBalance != null ? formatCurrency(stats.supplierBalance) : (stats.supplierConfigured ? 'Connected' : 'Not configured')}
+          hint={stats.supplierConfigured ? 'Exclusive supplier' : 'Configure PADODATAGH_API_KEY on the backend'}
+          icon="wallet"
+          tone={stats.supplierConfigured ? 'success' : 'warning'}
+        />
+        <StatsCard label="Total sales" value={formatCurrency(stats.totalSales)} hint="Successful orders only" icon="wallet" tone="success" />
+        <StatsCard label="Estimated profit" value={formatCurrency(stats.estimatedProfit)} hint="Selling price minus provider cost" icon="tag" tone="success" />
+        <StatsCard label="Total orders" value={stats.totalOrders} icon="list" />
+        <StatsCard label="Successful" value={stats.successfulOrders} icon="check" tone="success" />
+        <StatsCard label="Failed" value={stats.failedOrders} hint={`${stats.refundedOrders} refunded`} icon="alert" tone="danger" />
+        <StatsCard label="In progress" value={stats.inProgressOrders} hint="Pending, paid or processing" icon="clock" tone="info" />
+        <StatsCard label="Customers" value={stats.totalCustomers} hint="Registered accounts (guests not counted)" icon="users" />
+        <StatsCard label="Active packages" value={stats.activePackages} icon="package" />
+      </div>
+
       <form className="card admin-password" onSubmit={submitPasswordChange} noValidate>
         <h2>Change Password</h2>
         {passwordMessage && <Alert type={passwordMessage.type}>{passwordMessage.text}</Alert>}
@@ -106,29 +130,6 @@ export default function AdminDashboard() {
           {changingPassword ? 'Changing password...' : 'Change Password'}
         </button>
       </form>
-      {stats.ordersNeedingReview > 0 && (
-        <Alert type="warning" title={`${stats.ordersNeedingReview} order(s) need manual review`}>
-          Delivery status is unknown or a refund failed. <Link to="/admin/orders?review=1">Review them now</Link>
-        </Alert>
-      )}
-
-      <div className="dash__stats">
-        <StatsCard
-          label="PadodaTagh Wallet"
-          value={stats.supplierBalance != null ? formatCurrency(stats.supplierBalance) : (stats.supplierConfigured ? 'Connected' : 'Not configured')}
-          hint={stats.supplierConfigured ? 'Exclusive supplier' : 'Configure PADODATAGH_API_KEY on the backend'}
-          icon="wallet"
-          tone={stats.supplierConfigured ? 'success' : 'warning'}
-        />
-        <StatsCard label="Total sales" value={formatCurrency(stats.totalSales)} hint="Successful orders only" icon="wallet" tone="success" />
-        <StatsCard label="Estimated profit" value={formatCurrency(stats.estimatedProfit)} hint="Selling price minus provider cost" icon="tag" tone="success" />
-        <StatsCard label="Total orders" value={stats.totalOrders} icon="list" />
-        <StatsCard label="Successful" value={stats.successfulOrders} icon="check" tone="success" />
-        <StatsCard label="Failed" value={stats.failedOrders} hint={`${stats.refundedOrders} refunded`} icon="alert" tone="danger" />
-        <StatsCard label="In progress" value={stats.inProgressOrders} hint="Pending, paid or processing" icon="clock" tone="info" />
-        <StatsCard label="Customers" value={stats.totalCustomers} hint="Registered accounts (guests not counted)" icon="users" />
-        <StatsCard label="Active packages" value={stats.activePackages} icon="package" />
-      </div>
 
       <section className="card dash__recent" aria-labelledby="recent-orders">
         <div className="dash__recent-head">

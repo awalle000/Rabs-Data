@@ -6,6 +6,7 @@
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-soft);
 }
 
 .stats-card__icon {
@@ -14,9 +15,9 @@
   flex: none;
   width: 44px;
   height: 44px;
-  border-radius: 12px;
-  background: #eef2f7;
-  color: #334155;
+  border-radius: 8px;
+  background: #edf2ee;
+  color: #385647;
 }
 
 .stats-card--success .stats-card__icon {
@@ -47,6 +48,7 @@
 
 .stats-card__value {
   font-size: 1.35rem;
+  font-weight: 700;
   line-height: 1.25;
   overflow-wrap: anywhere;
 }

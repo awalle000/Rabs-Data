@@ -1,5 +1,10 @@
 .register {
   max-width: 460px;
+  padding-top: 2.5rem;
+}
+
+.register > .card {
+  box-shadow: 0 14px 34px rgba(20, 48, 34, 0.08);
 }
 
 .register__hint {

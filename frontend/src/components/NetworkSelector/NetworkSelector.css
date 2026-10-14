@@ -12,7 +12,7 @@
 
 .network-selector__options {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(132px, 100%), 1fr));
   gap: 0.75rem;
 }
 
@@ -22,11 +22,18 @@
   align-items: center;
   gap: 0.35rem;
   padding: 0.85rem 0.5rem;
-  border: 2px solid var(--color-border);
+  min-height: 118px;
+  border: 1px solid var(--color-border);
   border-radius: var(--radius);
   background: var(--color-surface);
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  box-shadow: var(--shadow-soft);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease, background-color 0.18s ease;
+}
+
+.network-selector__card:hover {
+  border-color: var(--color-primary);
+  transform: translateY(-1px);
 }
 
 .network-selector__name {
@@ -41,7 +48,7 @@
 .network-selector__option input:checked + .network-selector__card {
   border-color: var(--color-primary);
   background: var(--color-primary-soft);
-  box-shadow: 0 0 0 3px rgba(10, 125, 79, 0.15);
+  box-shadow: 0 0 0 3px rgba(8, 115, 74, 0.13);
 }
 
 .network-selector__option input:focus-visible + .network-selector__card {

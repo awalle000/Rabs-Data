@@ -12,7 +12,8 @@
 
 .admin-layout__main {
   flex: 1;
-  padding: 1.25rem;
+  min-width: 0;
+  padding: 1.5rem;
   outline: none;
 }
 
@@ -20,5 +21,9 @@
   .admin-layout {
     grid-template-columns: 1fr;
     padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .admin-layout__main {
+    padding: 1rem;
   }
 }
