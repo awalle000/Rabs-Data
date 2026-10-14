@@ -18,9 +18,20 @@ const supportsPush = () => 'serviceWorker' in navigator
   && 'PushManager' in window
   && 'Notification' in window;
 
+const getPushRegistration = async () => {
+  await navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' });
+  return navigator.serviceWorker.ready;
+};
+
+const persistSubscription = async (current) => {
+  const response = await registerAdminPushSubscription(current.toJSON());
+  if (!response?.success) throw new Error('The server did not confirm that this device was registered. Try again.');
+};
+
 export default function AdminPushSettings() {
   const [config, setConfig] = useState(null);
   const [subscription, setSubscription] = useState(null);
+  const [registered, setRegistered] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -28,15 +39,23 @@ export default function AdminPushSettings() {
   useEffect(() => {
     let active = true;
     if (!supportsPush()) return undefined;
-    Promise.all([getAdminPushStatus(), navigator.serviceWorker.ready])
+    Promise.all([getAdminPushStatus(), getPushRegistration()])
       .then(async ([status, registration]) => {
         const current = await registration.pushManager.getSubscription();
         if (!active) return;
         setConfig(status);
         setSubscription(current);
+        if (current && status.ready && status.publicKey) {
+          try {
+            await persistSubscription(current);
+            if (active) setRegistered(true);
+          } catch (caught) {
+            if (active) setError(caught.response?.data?.message || caught.message || 'This device subscription could not be saved. Enable notifications again to retry.');
+          }
+        }
       })
-      .catch(() => {
-        if (active) setError('Notification settings could not be loaded.');
+      .catch((caught) => {
+        if (active) setError(caught.response?.data?.message || caught.message || 'Notification settings could not be loaded.');
       });
     return () => { active = false; };
   }, []);
@@ -47,16 +66,22 @@ export default function AdminPushSettings() {
     setMessage('');
     try {
       if (!supportsPush()) throw new Error('This browser does not support web push notifications.');
-      if (!config?.ready || !config.publicKey) throw new Error('Admin notifications are not configured on the server yet.');
+      let currentConfig = config;
+      if (!currentConfig?.ready || !currentConfig.publicKey) {
+        currentConfig = await getAdminPushStatus();
+        setConfig(currentConfig);
+      }
+      if (!currentConfig?.ready || !currentConfig.publicKey) throw new Error('Admin push is not configured on the server. Ask the operator to set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT.');
       const permission = await Notification.requestPermission();
       if (permission !== 'granted') throw new Error(permission === 'denied'
         ? 'Notifications are blocked in this browser. Change the site permission in browser settings to enable them.'
         : 'Notification permission was not granted.');
-      const registration = await navigator.serviceWorker.ready;
+      const registration = await getPushRegistration();
       const current = await registration.pushManager.getSubscription()
-        || await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: encodeApplicationServerKey(config.publicKey) });
-      await registerAdminPushSubscription(current.toJSON());
+        || await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: encodeApplicationServerKey(currentConfig.publicKey) });
+      await persistSubscription(current);
       setSubscription(current);
+      setRegistered(true);
       setMessage('Notifications are enabled on this device.');
     } catch (caught) {
       setError(caught.response?.data?.message || caught.message || 'Could not enable notifications.');
@@ -75,6 +100,7 @@ export default function AdminPushSettings() {
         await subscription.unsubscribe();
       }
       setSubscription(null);
+      setRegistered(false);
       setMessage('Notifications are disabled on this device.');
     } catch (caught) {
       setError(caught.response?.data?.message || 'Could not disable notifications on this device.');
@@ -88,9 +114,12 @@ export default function AdminPushSettings() {
     setError('');
     setMessage('');
     try {
-      const registration = await navigator.serviceWorker.ready;
+      const registration = await getPushRegistration();
       const current = await registration.pushManager.getSubscription();
-      if (!current) throw new Error('No active subscription is available for this device.');
+      if (!current) throw new Error('This device has no browser push subscription. Select Enable Admin Notifications first.');
+      await persistSubscription(current);
+      setSubscription(current);
+      setRegistered(true);
       await sendAdminPushTest(current.endpoint);
       setMessage('A test notification was sent to this device only.');
     } catch (caught) {
@@ -102,7 +131,7 @@ export default function AdminPushSettings() {
 
   const unsupported = !supportsPush();
   const denied = !unsupported && Notification.permission === 'denied';
-  const enabled = Boolean(subscription);
+  const enabled = Boolean(subscription && registered);
   const status = unsupported ? 'Not supported' : denied ? 'Permission denied' : enabled ? 'Enabled' : 'Disabled';
 
   return (
