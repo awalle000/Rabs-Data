@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import Navbar from '../Navbar/Navbar.jsx';
 import Footer from '../Footer/Footer.jsx';
 import MobileBottomNav from '../MobileBottomNav/MobileBottomNav.jsx';
+import WhatsAppSupport from '../WhatsAppSupport/WhatsAppSupport.jsx';
 import './PublicLayout.css';
 
 export default function PublicLayout() {
@@ -23,6 +24,7 @@ export default function PublicLayout() {
       </main>
       <Footer />
       <MobileBottomNav />
+      <WhatsAppSupport elevated={pathname.replace(/\/$/, '') === '/buy'} />
     </div>
   );
 }
