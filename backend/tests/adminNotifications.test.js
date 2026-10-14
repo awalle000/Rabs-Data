@@ -147,6 +147,48 @@ test('notification REST and SSE endpoints reject guests and authenticated custom
   }
 });
 
+test('notifications stream preflight allows Last-Event-ID only from a configured origin', async (t) => {
+  const originalClientUrls = [...env.clientUrls];
+  if (!env.clientUrls.includes('https://rabs-data.vercel.app')) {
+    env.clientUrls.push('https://rabs-data.vercel.app');
+  }
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/api/admin/notifications/stream`;
+    const allowed = await fetch(url, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://rabs-data.vercel.app',
+        'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Headers': 'authorization,last-event-id',
+      },
+    });
+    assert.equal(allowed.status, 204);
+    assert.equal(allowed.headers.get('access-control-allow-origin'), 'https://rabs-data.vercel.app');
+    assert.equal(allowed.headers.get('access-control-allow-credentials'), 'true');
+    const allowedHeaders = allowed.headers.get('access-control-allow-headers')
+      .split(',').map((header) => header.trim().toLowerCase());
+    assert.ok(allowedHeaders.includes('authorization'));
+    assert.ok(allowedHeaders.includes('last-event-id'));
+
+    const denied = await fetch(url, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://untrusted.example',
+        'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Headers': 'authorization,last-event-id',
+      },
+    });
+    assert.equal(denied.headers.get('access-control-allow-origin'), null);
+  } finally {
+    env.clientUrls.splice(0, env.clientUrls.length, ...originalClientUrls);
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('webhook authentication fails closed when no secret is configured', () => {
   assert.equal(verifySharedWebhookToken('', ''), false);
   assert.equal(verifySharedWebhookToken(undefined, 'anything'), false);

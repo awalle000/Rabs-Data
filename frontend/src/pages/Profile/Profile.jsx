@@ -17,7 +17,7 @@ export default function Profile() {
   const [profileErrors, setProfileErrors] = useState({});
   const [savingProfile, setSavingProfile] = useState(false);
 
-  const [passwords, setPasswords] = useState({ currentPassword: '', newPassword: '' });
+  const [passwords, setPasswords] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [passwordMsg, setPasswordMsg] = useState(null);
   const [passwordErrors, setPasswordErrors] = useState({});
   const [savingPassword, setSavingPassword] = useState(false);
@@ -49,6 +49,9 @@ export default function Profile() {
     const next = {
       currentPassword: passwords.currentPassword ? '' : 'Enter your current password',
       newPassword: validatePassword(passwords.newPassword),
+      confirmPassword: !passwords.confirmPassword
+        ? 'Confirm your new password'
+        : passwords.newPassword !== passwords.confirmPassword ? 'Passwords do not match' : '',
     };
     setPasswordErrors(next);
     if (Object.values(next).some(Boolean)) return;
@@ -56,8 +59,9 @@ export default function Profile() {
     setSavingPassword(true);
     try {
       await authService.changePassword(passwords);
-      setPasswords({ currentPassword: '', newPassword: '' });
-      setPasswordMsg({ type: 'success', text: 'Password changed.' });
+      setPasswords({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      logout();
+      navigate('/login', { replace: true, state: { passwordChanged: true } });
     } catch (err) {
       setPasswordMsg({ type: 'error', text: getErrorMessage(err) });
     }
@@ -131,6 +135,18 @@ export default function Profile() {
           {passwordErrors.newPassword && (
             <span className="field__error" role="alert">
               {passwordErrors.newPassword}
+            </span>
+          )}
+        </div>
+
+        <div className="field">
+          <label className="field__label" htmlFor="confirmPassword">
+            Confirm new password
+          </label>
+          <input id="confirmPassword" type="password" className="field__control" autoComplete="new-password" value={passwords.confirmPassword} onChange={(event) => setPasswords({ ...passwords, confirmPassword: event.target.value })} aria-invalid={passwordErrors.confirmPassword ? 'true' : 'false'} />
+          {passwordErrors.confirmPassword && (
+            <span className="field__error" role="alert">
+              {passwordErrors.confirmPassword}
             </span>
           )}
         </div>

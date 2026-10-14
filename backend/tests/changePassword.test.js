@@ -11,6 +11,7 @@ const adminId = '64d9e76af742f8ab3f1e29d1';
 const otherId = '64d9e76af742f8ab3f1e29d2';
 const originalPassword = 'AdminPass123!';
 const nextPassword = 'NewAdminPass456!';
+let nextTestIp = 1;
 
 async function createAdmin(password = originalPassword) {
   return {
@@ -51,7 +52,7 @@ async function withApi(t, { authenticated = true, databaseError = false, saveErr
   const server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const token = jwt.sign({ id: adminId, tokenVersion: 0 }, env.jwtSecret, { expiresIn: '5m' });
-  let ip = 1;
+  let ip = nextTestIp++;
   const api = async (body, requestToken = authenticated ? token : null) => {
     const headers = { 'Content-Type': 'application/json', 'X-Forwarded-For': `10.0.0.${ip++}` };
     if (requestToken) headers.Authorization = `Bearer ${requestToken}`;
@@ -104,7 +105,11 @@ test('authenticated administrator changes password and old tokens are invalidate
   assert.equal(newLogin.status, 200);
   const oldTokenRequest = await fetch(`http://127.0.0.1:${api.port}/api/users/password`, {
     method: 'PUT',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'X-Forwarded-For': `10.0.0.${nextTestIp++}`,
+    },
     body: JSON.stringify(validChange),
   });
   assert.equal(oldTokenRequest.status, 401);
@@ -123,6 +128,14 @@ test('password confirmation mismatch and weak passwords are rejected', async (t)
   assert.equal(mismatch.response.status, 400);
   const weak = await api({ ...validChange, newPassword: 'short', confirmPassword: 'short' });
   assert.equal(weak.response.status, 400);
+  assert.equal(await bcrypt.compare(originalPassword, admin.password), true);
+});
+
+test('missing confirmation returns a safe validation error without changing the password', async (t) => {
+  const { api, admin } = await withApi(t);
+  const { response, payload } = await api({ currentPassword: originalPassword, newPassword: nextPassword });
+  assert.equal(response.status, 400);
+  assert.equal(payload.message, 'Password confirmation is required');
   assert.equal(await bcrypt.compare(originalPassword, admin.password), true);
 });
 
