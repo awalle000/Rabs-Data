@@ -139,6 +139,14 @@ export const validateGoogleAppsScriptConfig = ({ url, secret }) => {
   return { missingVariables, invalidVariables, endpointValid };
 };
 
+const safeScriptDiagnostic = (value, allowedValues) => {
+  if (typeof value !== 'string' || value.length > 48 || !/^[A-Za-z][A-Za-z0-9_-]*$/.test(value)) return undefined;
+  const normalized = value.toLowerCase();
+  return allowedValues.has(normalized) ? normalized : undefined;
+};
+const hasScriptResponseField = (payload, field) =>
+  payload !== null && typeof payload === 'object' && Object.hasOwn(payload, field);
+
 export const sendGoogleAppsScriptEmail = async ({
   url,
   secret,
@@ -219,6 +227,11 @@ export const sendGoogleAppsScriptEmail = async ({
       outcome: 'accepted',
       stage: 'script_response',
       httpStatus: response.status,
+      hasOkField: hasScriptResponseField(payload, 'ok'),
+      hasStatusField: hasScriptResponseField(payload, 'status'),
+      hasCodeField: hasScriptResponseField(payload, 'code'),
+      scriptStatus: safeScriptDiagnostic(payload?.status, new Set(['ok', 'success', 'sent'])),
+      scriptCode: safeScriptDiagnostic(payload?.code, new Set(['ok', 'success', 'sent'])),
     });
     return { outcome: 'accepted' };
   }
@@ -231,6 +244,13 @@ export const sendGoogleAppsScriptEmail = async ({
       stage: 'script_response',
       code: 'GOOGLE_APPS_SCRIPT_REJECTED',
       httpStatus: response.status,
+      hasOkField: hasScriptResponseField(payload, 'ok'),
+      hasStatusField: hasScriptResponseField(payload, 'status'),
+      hasCodeField: hasScriptResponseField(payload, 'code'),
+      scriptStatus: safeScriptDiagnostic(payload?.status, new Set(['error', 'failed', 'rejected', 'unauthorized'])),
+      scriptCode: safeScriptDiagnostic(payload?.code, new Set([
+        'error', 'failed', 'rejected', 'unauthorized', 'invalid_secret', 'missing_fields', 'mailapp_error',
+      ])),
     });
     return { outcome: 'failed' };
   }
@@ -242,6 +262,13 @@ export const sendGoogleAppsScriptEmail = async ({
     stage: 'response',
     code: 'GOOGLE_APPS_SCRIPT_INVALID_RESPONSE',
     httpStatus: response.status,
+    hasOkField: hasScriptResponseField(payload, 'ok'),
+    hasStatusField: hasScriptResponseField(payload, 'status'),
+    hasCodeField: hasScriptResponseField(payload, 'code'),
+    scriptStatus: safeScriptDiagnostic(payload?.status, new Set(['ok', 'success', 'sent', 'error', 'failed', 'rejected', 'unauthorized'])),
+    scriptCode: safeScriptDiagnostic(payload?.code, new Set([
+      'ok', 'success', 'sent', 'error', 'failed', 'rejected', 'unauthorized', 'invalid_secret', 'missing_fields', 'mailapp_error',
+    ])),
   });
   return { outcome: 'unknown' };
 };

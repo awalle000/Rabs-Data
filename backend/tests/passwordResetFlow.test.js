@@ -352,7 +352,7 @@ test('Apps Script sends the exact JSON contract and recognizes ok:true without l
   }
 });
 
-test('Apps Script ok:false is a confirmed failure and logs no script message or secret', async () => {
+test('Apps Script ok:false over HTTP 200 is rejected and logs safe response metadata', async () => {
   let logged;
   const originalError = console.error;
   console.error = (...args) => { logged = args; };
@@ -365,14 +365,56 @@ test('Apps Script ok:false is a confirmed failure and logs no script message or 
       textBody: 'text',
       htmlBody: '<p>html</p>',
       requestId: 'gas-rejected-request',
-      fetchImpl: async () => new Response(JSON.stringify({ ok: false, error: 'private script detail' }), { status: 200 }),
+      fetchImpl: async () => new Response(JSON.stringify({
+        ok: false,
+        status: 'unauthorized',
+        code: 'invalid_secret',
+        error: 'private script detail',
+      }), { status: 200 }),
     });
     assert.equal(result.outcome, 'failed');
     assert.equal(logged[1].code, 'GOOGLE_APPS_SCRIPT_REJECTED');
     assert.equal(logged[1].requestId, 'gas-rejected-request');
+    assert.equal(logged[1].httpStatus, 200);
+    assert.equal(logged[1].hasOkField, true);
+    assert.equal(logged[1].hasStatusField, true);
+    assert.equal(logged[1].hasCodeField, true);
+    assert.equal(logged[1].scriptStatus, 'unauthorized');
+    assert.equal(logged[1].scriptCode, 'invalid_secret');
     assert.doesNotMatch(JSON.stringify(logged), /server-shared-secret|customer@example\.com|private script detail/);
   } finally {
     console.error = originalError;
+  }
+});
+
+test('Apps Script unexpected JSON fields are not treated as success and only field presence is logged', async () => {
+  let logged;
+  const originalWarn = console.warn;
+  console.warn = (...args) => { logged = args; };
+  try {
+    const result = await sendGoogleAppsScriptEmail({
+      url: 'https://script.google.com/macros/s/deployment-id/exec',
+      secret: 'server-shared-secret',
+      to: 'customer@example.com',
+      subject: 'Password reset',
+      textBody: 'text',
+      htmlBody: '<p>html</p>',
+      fetchImpl: async () => new Response(JSON.stringify({
+        success: true,
+        status: 'unexpected-private-value',
+        code: 'private-script-code-with-details',
+      }), { status: 200 }),
+    });
+    assert.equal(result.outcome, 'unknown');
+    assert.equal(logged[1].code, 'GOOGLE_APPS_SCRIPT_INVALID_RESPONSE');
+    assert.equal(logged[1].hasOkField, false);
+    assert.equal(logged[1].hasStatusField, true);
+    assert.equal(logged[1].hasCodeField, true);
+    assert.equal(logged[1].scriptStatus, undefined);
+    assert.equal(logged[1].scriptCode, undefined);
+    assert.doesNotMatch(JSON.stringify(logged), /unexpected-private-value|private-script-code-with-details|server-shared-secret|customer@example\.com/);
+  } finally {
+    console.warn = originalWarn;
   }
 });
 
@@ -734,4 +776,17 @@ test('Apps Script password-reset delivery sends the configured Vercel link with 
   assert.equal(user.passwordResetTokenHash, crypto.createHash('sha256').update(rawToken).digest('hex'));
   assert.equal(payload.to, user.email);
   assert.equal(payload.htmlBody.includes(resetUrl), true);
+});
+
+test('Apps Script valid JSON null remains an invalid response without throwing', async () => {
+  const result = await sendGoogleAppsScriptEmail({
+    url: 'https://script.google.com/macros/s/deployment-id/exec',
+    secret: 'server-shared-secret',
+    to: 'customer@example.com',
+    subject: 'Password reset',
+    textBody: 'text',
+    htmlBody: '<p>html</p>',
+    fetchImpl: async () => new Response('null', { status: 200 }),
+  });
+  assert.equal(result.outcome, 'unknown');
 });
