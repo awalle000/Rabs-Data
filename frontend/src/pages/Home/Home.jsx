@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import useAsync from '../../hooks/useAsync.js';
 import { useBackendConnection } from '../../context/BackendConnectionContext.jsx';
@@ -29,6 +29,13 @@ export default function Home() {
   const navigate = useNavigate();
   const connection = useBackendConnection();
   const { data, loading, error, reload } = useAsync(getCatalog, [], { immediate: false });
+  const [lastGoodData, setLastGoodData] = useState(null);
+
+  useEffect(() => {
+    if (data?.success && Array.isArray(data.packages)) setLastGoodData(data);
+  }, [data]);
+
+  const catalog = data?.success ? data : lastGoodData;
 
   useEffect(() => {
     if (!connection.isConnected) return;
@@ -44,13 +51,13 @@ export default function Home() {
 
   const popular = useMemo(() => {
     const byNetwork = {};
-    (data?.packages || []).forEach((pkg) => {
+    (catalog?.packages || []).forEach((pkg) => {
       (byNetwork[pkg.network] ||= []).push(pkg);
     });
     return Object.values(byNetwork)
       .flatMap((list) => list.slice(0, 2))
       .slice(0, 6);
-  }, [data]);
+  }, [catalog]);
 
   return (
     <>
@@ -77,9 +84,9 @@ export default function Home() {
               <span className="hero__visual-kicker">Your choice</span>
               <strong>Pick a network</strong>
             </div>
-            {data?.networks?.length ? (
+            {catalog?.networks?.length ? (
               <ul className="hero__network-list">
-                {data.networks.slice(0, 3).map((network) => (
+                {catalog.networks.slice(0, 3).map((network) => (
                   <li key={network.code} className="hero__network-item">
                     <NetworkLogo network={network.code} size="md" />
                     <span>
@@ -105,9 +112,9 @@ export default function Home() {
         </h2>
         {!connection.isWaiting && !connection.isOffline && !connection.isUnavailable && loading && <Loader label="Loading networks..." />}
         {!connection.isWaiting && !connection.isOffline && !connection.isUnavailable && error && <Alert onRetry={reload}>{error}</Alert>}
-        {data && (
+        {catalog && (
           <ul className="home-networks">
-            {data.networks.map((network) => (
+            {catalog.networks.map((network) => (
               <li key={network.code}>
                                 <Link to={`/buy?network=${network.code}`} className="home-networks__card">
                   <NetworkLogo network={network.code} size="lg" />
@@ -125,11 +132,11 @@ export default function Home() {
           Popular bundles
         </h2>
         {!connection.isWaiting && !connection.isOffline && !connection.isUnavailable && loading && <Loader label="Loading bundles..." />}
-        {data && popular.length === 0 && (
+        {catalog && popular.length === 0 && (
           <EmptyState
             icon="package"
             title="Bundles are coming soon"
-            message={data.catalogMessage || 'Check back shortly for available data bundles.'}
+            message={catalog.catalogMessage || 'Check back shortly for available data bundles.'}
           />
         )}
         {popular.length > 0 && (

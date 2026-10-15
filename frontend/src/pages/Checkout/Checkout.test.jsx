@@ -102,3 +102,16 @@ it('keeps an in-progress purchase visible instead of navigating as if order crea
   expect(state.initializePayment).not.toHaveBeenCalled();
   expect(state.navigate).not.toHaveBeenCalled();
 });
+
+it('does not initialize Paystack when supplier preflight rejects the selected package', async () => {
+  state.createOrder.mockRejectedValue(Object.assign(new Error('supplier stale'), {
+    response: { status: 503, data: { code: 'PRIMARY_SUPPLIER_UNAVAILABLE' } },
+  }));
+  render(<Checkout />);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Pay GH₵10.00' }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(/no payment was started/i);
+  expect(state.initializePayment).not.toHaveBeenCalled();
+  expect(state.navigate).not.toHaveBeenCalled();
+});

@@ -193,7 +193,7 @@ test('empty public catalog reports that no package passed integrity checks', asy
   }
 });
 
-test('public catalog endpoints fail closed during a partial refresh or after an unsuccessful refresh', async () => {
+test('public catalog endpoints serve only verified stored packages during refresh and fail after a refresh error', async () => {
   const originals = { find: DataPackage.find, catalogFindOne: CatalogSyncState.findOne };
   let state = {
     status: 'syncing',
@@ -201,19 +201,38 @@ test('public catalog endpoints fail closed during a partial refresh or after an 
     lastSuccessfulAt: new Date(Date.now() - 60_000),
   };
   let packageQueries = 0;
-  DataPackage.find = () => {
+  const validStored = makePackage('MTN', {
+    _id: 'verified-stored-during-sync',
+    supplierOffers: { padodatagh: {
+      ...makePackage('MTN').supplierOffers.padodatagh,
+      lastVerifiedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+    } },
+  });
+  const incomplete = makePackage('Telecel', {
+    _id: 'unverified-during-sync',
+    supplierOffers: { padodatagh: {
+      ...makePackage('Telecel').supplierOffers.padodatagh,
+      catalogVerified: false,
+    } },
+  });
+  DataPackage.find = (filter) => {
     packageQueries += 1;
-    throw new Error('package reads must not occur while publication is partial');
+    const records = [validStored, incomplete].filter((record) =>
+      record.isActive === filter.isActive && filter.network.$in.includes(record.network));
+    const chain = { select() { return chain; }, sort() { return chain; }, lean: async () => records };
+    return chain;
   };
   CatalogSyncState.findOne = () => ({ lean: async () => state });
 
   try {
-    for (const controller of [getCatalog, getNetworks, getPackages]) {
-      await assert.rejects(
-        callController(controller, { query: {} }),
-        (error) => error.code === 'CATALOG_REFRESH_IN_PROGRESS' && error.statusCode === 503
-      );
-    }
+    const catalog = await callController(getCatalog, { query: {} });
+    assert.equal(catalog.count, 1);
+    assert.deepEqual(catalog.packages.map(({ _id }) => _id), [validStored._id]);
+    const networks = await callController(getNetworks, { query: {} });
+    assert.equal(networks.networks.find(({ code }) => code === 'MTN').packageCount, 1);
+    const packages = await callController(getPackages, { query: {} });
+    assert.equal(packages.count, 1);
+    assert.equal(packageQueries, 3);
 
     state = {
       status: 'error',
@@ -222,9 +241,11 @@ test('public catalog endpoints fail closed during a partial refresh or after an 
     };
     await assert.rejects(
       callController(getCatalog, { query: {} }),
-      (error) => error.code === 'CATALOG_REFRESH_IN_PROGRESS' && error.statusCode === 503
+      (error) => error.code === 'CATALOG_REFRESH_IN_PROGRESS'
+        && error.statusCode === 503
+        && /refresh failed/i.test(error.message)
     );
-    assert.equal(packageQueries, 0);
+    assert.equal(packageQueries, 3);
   } finally {
     DataPackage.find = originals.find;
     CatalogSyncState.findOne = originals.catalogFindOne;

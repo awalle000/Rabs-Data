@@ -20,20 +20,19 @@ const toPublicPackage = ({ providerCost, providerPackageCode, providerPlanId, su
 
 const catalogPublicationState = async () => {
   const state = await CatalogSyncState.findOne({ name: 'padodatagh_catalog' }).lean();
-  const refreshStarted = state?.lastStartedAt ? new Date(state.lastStartedAt).getTime() : 0;
-  const lastSuccess = state?.lastSuccessfulAt ? new Date(state.lastSuccessfulAt).getTime() : 0;
-  if (state?.status === 'syncing' || (state?.status === 'error' && refreshStarted > lastSuccess)) {
+  if (state?.status === 'error') {
     const error = new AppError(
-      'The data catalog is being refreshed and is temporarily unavailable. Please retry shortly.',
+      'The latest data catalog refresh failed. Please retry shortly.',
       503,
       'CATALOG_REFRESH_IN_PROGRESS'
     );
     error.retryAfterSeconds = 15;
     throw error;
   }
-  const allowStoredVerification = !env.supplierCatalogRefreshEnabled
-    && !['syncing', 'error'].includes(state?.status);
+  const allowStoredVerification = state?.status === 'syncing'
+    || (!env.supplierCatalogRefreshEnabled && state?.status !== 'error');
   return {
+    status: state?.status || 'idle',
     version: state ? [state.status, state.lastStartedAt, state.lastFinishedAt, state.lastSuccessfulAt, state.lockToken].join('|') : null,
     requireFreshVerification: !allowStoredVerification,
   };
@@ -43,7 +42,7 @@ export const assertCatalogPublicationReady = async () => catalogPublicationState
 
 const assertCatalogPublicationUnchanged = async (before) => {
   const after = await catalogPublicationState();
-  if (before.version !== after.version) {
+  if (before.version !== after.version && before.status !== 'syncing' && after.status !== 'syncing') {
     const error = new AppError(
       'The data catalog changed during refresh. Please retry shortly.',
       503,

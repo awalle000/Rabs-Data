@@ -9,28 +9,38 @@ const [
   { default: DataPackage },
   { default: PurchaseOperation },
   { default: SupplierControl },
+  { default: Counter },
+  { default: AdminNotification },
+  { default: AdminPushEvent },
   { createOrder },
   dataProvider,
   padoda,
+  { isEligiblePadodaPackage },
 ] = await Promise.all([
   import('../models/Order.js'),
   import('../models/DataPackage.js'),
   import('../models/PurchaseOperation.js'),
   import('../models/SupplierControl.js'),
+  import('../models/Counter.js'),
+  import('../models/AdminNotification.js'),
+  import('../models/AdminPushEvent.js'),
   import('../controllers/orderController.js'),
   import('../services/dataProviderService.js'),
   import('../services/padodataghService.js'),
+  import('../services/supplierCatalogService.js'),
 ]);
 
 const invoke = async (packageId, idempotencyKey) => {
+  let response;
   await createOrder(
     {
       body: { packageId, recipientPhone: '0240000000', contactPhone: '0240000000', paymentMethod: 'direct', idempotencyKey },
       user: { _id: '64d9e76af742f8ab3f1e29d1', email: 'buyer@example.com', phone: '0240000000' },
     },
-    { status() { return this; }, json(value) { return value; } },
+    { status(code) { this.statusCode = code; return this; }, json(value) { response = { statusCode: this.statusCode || 200, body: value }; return response; } },
     (error) => { throw error; }
   );
+  return response;
 };
 
 test('checkout rejects ambiguous offers before order creation or supplier submission', async () => {
@@ -104,6 +114,7 @@ test('checkout rejects ambiguous offers before order creation or supplier submis
         invoke(packageId, `checkout-ambiguous-${index}`),
         (error) => error.code === 'PRIMARY_SUPPLIER_UNAVAILABLE'
       );
+      assert.equal(isEligiblePadodaPackage(packages.get(packageId)), false);
     }
 
     const legacyPackageId = '64d9e76af742f8ab3f1e30a0';
@@ -121,6 +132,17 @@ test('checkout rejects ambiguous offers before order creation or supplier submis
       (error) => error.code === 'PRIMARY_SUPPLIER_UNAVAILABLE'
     );
 
+    const expiredId = '64d9e76af742f8ab3f1e30a1';
+    const expired = { ...packages.get(legacyPackageId), _id: expiredId };
+    expired.supplierOffers.padodatagh.catalogVerified = true;
+    expired.supplierOffers.padodatagh.lastVerifiedAt = new Date(Date.now() - 31 * 60 * 1000);
+    packages.set(expiredId, expired);
+    await assert.rejects(
+      invoke(expiredId, 'checkout-stale-verified-package'),
+      (error) => error.code === 'PRIMARY_SUPPLIER_UNAVAILABLE'
+    );
+    assert.equal(isEligiblePadodaPackage(expired), false);
+
     assert.equal(ordersCreated, 0);
     assert.equal(supplierSubmissions, 0);
   } finally {
@@ -132,5 +154,116 @@ test('checkout rejects ambiguous offers before order creation or supplier submis
     PurchaseOperation.findOne = originals.operationFindOne;
     PurchaseOperation.findOneAndUpdate = originals.operationFindOneAndUpdate;
     SupplierControl.findOne = originals.controlFindOne;
+  }
+});
+
+test('same preflight operation safely recovers after stored supplier eligibility is authoritatively refreshed', async () => {
+  const originals = {
+    orderCreate: Order.create,
+    orderFindOne: Order.findOne,
+    packageFindOne: DataPackage.findOne,
+    operationCreate: PurchaseOperation.create,
+    operationFindOne: PurchaseOperation.findOne,
+    operationFindOneAndUpdate: PurchaseOperation.findOneAndUpdate,
+    controlFindOne: SupplierControl.findOne,
+    counterFindOneAndUpdate: Counter.findOneAndUpdate,
+    notificationCreate: AdminNotification.create,
+    pushCreate: AdminPushEvent.create,
+  };
+  const packageId = '64d9e76af742f8ab3f1e30b1';
+  const operationRecords = new Map();
+  let orderCreates = 0;
+  let supplierSubmissions = 0;
+  let operationSequence = 0;
+  const storedPackage = {
+    _id: packageId,
+    network: 'MTN',
+    name: 'MTN 1GB',
+    dataAmount: '1GB',
+    validity: 'Non-expiry',
+    bundleType: 'standard',
+    restrictions: [],
+    volumeInMB: 1024,
+    sellingPrice: 10,
+    providerCost: 5,
+    providerPackageCode: 'mtn-live-offer',
+    providerPlanId: '11111111-1111-4111-8111-111111111111',
+    isActive: true,
+    supplierOffers: { padodatagh: {
+      packageCode: 'mtn-live-offer',
+      planId: '11111111-1111-4111-8111-111111111111',
+      supplierCost: 5,
+      network: 'MTN',
+      volumeInMB: 1024,
+      validity: 'Non-expiry',
+      bundleType: 'standard',
+      restrictions: [],
+      hasUnstructuredConditions: false,
+      hasValidityConflict: false,
+      catalogVerified: true,
+      lastVerifiedAt: new Date(Date.now() - 31 * 60 * 1000),
+    } },
+  };
+
+  Order.findOne = async () => null;
+  Order.create = async (record) => {
+    orderCreates += 1;
+    return {
+      ...record,
+      _id: `order-${orderCreates}`,
+      trackingToken: 'guest-token',
+      toCustomerJSON() { return { _id: this._id, orderId: this.orderId, status: this.status }; },
+    };
+  };
+  DataPackage.findOne = async () => storedPackage;
+  PurchaseOperation.findOne = (filter) => ({ lean: async () => operationRecords.get(filter.key) || null });
+  PurchaseOperation.create = async (record) => {
+    if (operationRecords.has(record.key)) throw Object.assign(new Error('duplicate key'), { code: 11000 });
+    const operation = { ...record, _id: `operation-${++operationSequence}` };
+    operationRecords.set(record.key, operation);
+    return operation;
+  };
+  PurchaseOperation.findOneAndUpdate = async (filter, update) => {
+    const operation = operationRecords.get(filter.key);
+    if (!operation || (filter.status && operation.status !== filter.status)) return null;
+    Object.assign(operation, update.$set);
+    return operation;
+  };
+  SupplierControl.findOne = () => ({ lean: async () => ({ suppliers: { padodatagh: { enabled: true } } }) });
+  Counter.findOneAndUpdate = async () => ({ seq: 1 });
+  AdminNotification.create = async (event) => event;
+  AdminPushEvent.create = async (event) => event;
+  dataProvider.setMockPurchaser(async () => {
+    supplierSubmissions += 1;
+    return { status: 'processing' };
+  });
+
+  try {
+    const key = 'checkout-refresh-recovery-key';
+    await assert.rejects(invoke(packageId, key), (error) => error.code === 'PRIMARY_SUPPLIER_UNAVAILABLE');
+    assert.equal(orderCreates, 0);
+    assert.equal([...operationRecords.values()][0].status, 'failed');
+
+    storedPackage.supplierOffers.padodatagh.lastVerifiedAt = new Date();
+    const response = await invoke(packageId, key);
+
+    assert.equal(response.statusCode, 201);
+    assert.equal(response.body.duplicate, undefined);
+    assert.equal(orderCreates, 1);
+    assert.equal(operationRecords.size, 1);
+    assert.equal([...operationRecords.values()][0].status, 'created');
+    assert.equal(supplierSubmissions, 0);
+  } finally {
+    dataProvider.setMockPurchaser(null);
+    Order.create = originals.orderCreate;
+    Order.findOne = originals.orderFindOne;
+    DataPackage.findOne = originals.packageFindOne;
+    PurchaseOperation.create = originals.operationCreate;
+    PurchaseOperation.findOne = originals.operationFindOne;
+    PurchaseOperation.findOneAndUpdate = originals.operationFindOneAndUpdate;
+    SupplierControl.findOne = originals.controlFindOne;
+    Counter.findOneAndUpdate = originals.counterFindOneAndUpdate;
+    AdminNotification.create = originals.notificationCreate;
+    AdminPushEvent.create = originals.pushCreate;
   }
 });
