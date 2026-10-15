@@ -62,6 +62,40 @@ export const getPurchaseOperationState = async ({ key, customerId, payload }) =>
     if (!existing) throw error;
   }
 
+  let canResume = false;
+  if (existing.status === 'failed'
+    && !existing.order
+    && !existing.paymentReference
+    && !existing.supplierReference
+    && existing.lastKnownState?.stage === 'failed'
+    && existing.payloadSnapshot?.reason === 'primary_offer_unavailable_or_stale') {
+    const resumed = await PurchaseOperation.findOneAndUpdate(
+      {
+        key: normalizedKey,
+        status: 'failed',
+        order: null,
+        paymentReference: null,
+        supplierReference: null,
+        'payloadSnapshot.reason': 'primary_offer_unavailable_or_stale',
+      },
+      {
+        $set: {
+          status: 'processing',
+          payloadSnapshot: payload,
+          lastKnownState: { stage: 'retrying_preflight' },
+          expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7),
+        },
+      },
+      { returnDocument: 'after' }
+    );
+    if (resumed) {
+      existing = resumed;
+      canResume = true;
+    } else {
+      existing = await PurchaseOperation.findOne({ key: normalizedKey }).lean();
+    }
+  }
+
   if (String(existing.customer || '') !== String(customerId || '')) {
     throw new AppError('This purchase request is not available for this customer.', 409, 'IDEMPOTENCY_FORBIDDEN');
   }
@@ -74,7 +108,7 @@ export const getPurchaseOperationState = async ({ key, customerId, payload }) =>
     clientKey,
     requestFingerprint,
     operation: existing,
-    isNew,
+    isNew: isNew || canResume,
     currentStatus: existing.status,
   };
 };

@@ -11,6 +11,7 @@ import {
 } from '../utils/webhookIdempotency.js';
 import { tokenVersionMatches } from '../utils/tokenVersion.js';
 import WebhookEvent from '../models/WebhookEvent.js';
+import PurchaseOperation from '../models/PurchaseOperation.js';
 import { registerWebhookEvent } from '../utils/webhookIdempotency.js';
 
 test('generatePurchaseIdempotencyKey produces a fresh unique key', () => {
@@ -80,6 +81,96 @@ test('different package or phone values produce a different fingerprint', () => 
   });
 
   assert.notEqual(first, second);
+});
+
+test('known supplier preflight failure with no order or references can resume the same operation', async () => {
+  const originals = {
+    findOne: PurchaseOperation.findOne,
+    create: PurchaseOperation.create,
+    findOneAndUpdate: PurchaseOperation.findOneAndUpdate,
+  };
+  const operations = new Map();
+  let operationId = 0;
+  let resumeClaims = 0;
+  PurchaseOperation.findOne = (filter) => ({ lean: async () => operations.get(filter.key) || null });
+  PurchaseOperation.create = async (record) => {
+    if (operations.has(record.key)) throw Object.assign(new Error('duplicate key'), { code: 11000 });
+    const operation = { ...record, _id: `operation-${++operationId}` };
+    operations.set(record.key, operation);
+    return operation;
+  };
+  PurchaseOperation.findOneAndUpdate = async (filter, update) => {
+    const operation = operations.get(filter.key);
+    if (!operation || operation.status !== filter.status || operation.order
+      || operation.paymentReference || operation.supplierReference
+      || operation.payloadSnapshot?.reason !== filter['payloadSnapshot.reason']) return null;
+    resumeClaims += 1;
+    Object.assign(operation, update.$set);
+    return operation;
+  };
+
+  try {
+    const purchaseIdempotency = await import('../utils/purchaseIdempotency.js');
+    const input = {
+      key: 'checkout-preflight-key-12345',
+      customerId: 'customer-1',
+      payload: { packageId: 'package-1', recipientPhone: '0240000000', paymentMethod: 'direct' },
+    };
+    const first = await purchaseIdempotency.getPurchaseOperationState(input);
+    const operation = [...operations.values()][0];
+    operation.status = 'failed';
+    operation.payloadSnapshot = { reason: 'primary_offer_unavailable_or_stale' };
+    operation.lastKnownState = { stage: 'failed' };
+
+    const retry = await purchaseIdempotency.getPurchaseOperationState(input);
+    assert.equal(retry.isNew, true);
+    assert.equal(retry.operation._id, first.operation._id);
+    assert.equal(retry.operation.status, 'processing');
+    assert.equal(retry.operation.lastKnownState.stage, 'retrying_preflight');
+    assert.equal(resumeClaims, 1);
+    assert.equal(operations.size, 1);
+  } finally {
+    PurchaseOperation.findOne = originals.findOne;
+    PurchaseOperation.create = originals.create;
+    PurchaseOperation.findOneAndUpdate = originals.findOneAndUpdate;
+  }
+});
+
+test('failed operation with a payment reference remains terminal and cannot be resumed as a new purchase', async () => {
+  const originals = {
+    findOne: PurchaseOperation.findOne,
+    create: PurchaseOperation.create,
+    findOneAndUpdate: PurchaseOperation.findOneAndUpdate,
+  };
+  const operations = new Map();
+  let operationId = 0;
+  PurchaseOperation.findOne = (filter) => ({ lean: async () => operations.get(filter.key) || null });
+  PurchaseOperation.create = async (record) => {
+    if (operations.has(record.key)) throw Object.assign(new Error('duplicate key'), { code: 11000 });
+    const created = { ...record, _id: `operation-${++operationId}` };
+    operations.set(record.key, created);
+    return created;
+  };
+  PurchaseOperation.findOneAndUpdate = async () => { throw new Error('operation with a payment reference must not be resumed'); };
+
+  try {
+    const purchaseIdempotency = await import('../utils/purchaseIdempotency.js');
+    const input = { key: 'raw-retry-key', customerId: 'customer-1', payload: { packageId: 'package-1', recipientPhone: '0240000000', paymentMethod: 'direct' } };
+    await purchaseIdempotency.getPurchaseOperationState(input);
+    const operation = [...operations.values()][0];
+    operation.status = 'failed';
+    operation.paymentReference = 'DHP-PERSISTED-REF';
+    operation.payloadSnapshot = { reason: 'primary_offer_unavailable_or_stale' };
+    operation.lastKnownState = { stage: 'failed' };
+    const state = await purchaseIdempotency.getPurchaseOperationState(input);
+    assert.equal(state.isNew, false);
+    assert.equal(state.currentStatus, 'failed');
+    assert.equal(operation.status, 'failed');
+  } finally {
+    PurchaseOperation.findOne = originals.findOne;
+    PurchaseOperation.create = originals.create;
+    PurchaseOperation.findOneAndUpdate = originals.findOneAndUpdate;
+  }
 });
 
 test('webhook event hashes are stable for equivalent callbacks and flag duplicates', () => {

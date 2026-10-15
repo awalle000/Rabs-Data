@@ -242,12 +242,27 @@ export const initializePayment = asyncHandler(async (req, res) => {
       metadata: payment.providerMetadata,
     });
   } catch (error) {
-    await Payment.updateOne({ _id: payment._id, status: 'initialized' }, {
-      $set: {
-        initializationState: 'uncertain',
-        failureReason: 'Paystack initialization outcome is uncertain; verify the stored reference before any retry.',
-      },
-    });
+    if (error.definitive === true) {
+      await Payment.updateOne({ _id: payment._id, status: 'initialized', initializationState: 'in_progress' }, {
+        $set: {
+          status: 'failed',
+          initializationState: 'failed',
+          failureReason: 'Paystack definitively rejected initialization before an authorization session was created.',
+        },
+      });
+      await Order.updateOne(
+        { _id: order._id, status: 'payment_pending', paymentReference: reference, paymentProvider: 'paystack' },
+        { $set: { status: 'pending', paymentStatus: 'pending' }, $unset: { paymentReference: 1, paymentProvider: 1 } }
+      );
+      error.code = 'PAYMENT_INITIALIZATION_REJECTED';
+    } else {
+      await Payment.updateOne({ _id: payment._id, status: 'initialized' }, {
+        $set: {
+          initializationState: 'uncertain',
+          failureReason: 'Paystack initialization outcome is uncertain; verify the stored reference before any retry.',
+        },
+      });
+    }
     throw error;
   }
 

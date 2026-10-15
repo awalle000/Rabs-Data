@@ -15,7 +15,7 @@ const [{ default: Order }, { default: Payment }, { default: User }, { default: S
   import('../controllers/paymentController.js'),
 ]);
 
-const makeHarness = ({ failPaymentCreate = false, gatewayTimeout = false, customer = '64d9e76af742f8ab3f1e29d1', existingPayment = null, supplierEnabled = true } = {}) => {
+const makeHarness = ({ failPaymentCreate = false, gatewayTimeout = false, gatewayRejectStatus = null, customer = '64d9e76af742f8ab3f1e29d1', existingPayment = null, supplierEnabled = true } = {}) => {
   const order = {
     _id: '64d9e76af742f8ab3f1e29d2',
     orderId: 'DH-20261009-000001',
@@ -62,7 +62,10 @@ const makeHarness = ({ failPaymentCreate = false, gatewayTimeout = false, custom
     return order;
   };
   Order.updateOne = async (filter, update) => {
-    if (order._id === String(filter._id)) Object.assign(order, update.$set);
+    if (order._id === String(filter._id)) {
+      Object.assign(order, update.$set);
+      for (const field of Object.keys(update.$unset || {})) delete order[field];
+    }
     return { modifiedCount: 1 };
   };
   Payment.findOne = async (filter) => {
@@ -87,6 +90,12 @@ const makeHarness = ({ failPaymentCreate = false, gatewayTimeout = false, custom
   globalThis.fetch = async (url, options) => {
     gatewayRequests += 1;
     if (gatewayTimeout) throw new TypeError('simulated timeout');
+    if (gatewayRejectStatus && gatewayRequests === 1) {
+      return new Response(JSON.stringify({ status: false, message: 'mock definitive rejection' }), {
+        status: gatewayRejectStatus,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
     const requestBody = JSON.parse(options.body || '{}');
     return new Response(JSON.stringify({
       status: true,
@@ -381,6 +390,42 @@ test('disabled supplier blocks direct payment before reusing authorization or co
     await assert.rejects(invoke(), (error) => error.code === 'PRIMARY_SUPPLIER_UNAVAILABLE');
     assert.equal(harness.counts().gatewayRequests, 0);
     assert.equal(harness.order.status, 'payment_pending');
+  } finally {
+    await harness.restore();
+  }
+});
+
+test('definitive Paystack initialization rejection resets only the unpaid order and retry uses a new persisted reference', async () => {
+  const harness = makeHarness({ gatewayRejectStatus: 400 });
+  try {
+    await assert.rejects(invoke(), (error) => error.code === 'PAYMENT_INITIALIZATION_REJECTED' && error.definitive === true);
+    const firstPayment = [...harness.payments.values()][0];
+    const failedReference = firstPayment.reference;
+    assert.equal(firstPayment.status, 'failed');
+    assert.equal(firstPayment.initializationState, 'failed');
+    assert.equal(harness.order.status, 'pending');
+    assert.equal(harness.order.paymentReference, undefined);
+
+    const retry = await invoke();
+    assert.equal(retry.statusCode, 201);
+    assert.equal(harness.payments.size, 2);
+    assert.notEqual(harness.order.paymentReference, failedReference);
+    assert.equal(harness.counts().gatewayRequests, 2);
+    assert.equal([...harness.payments.values()].filter(({ status }) => status === 'pending').length, 1);
+  } finally {
+    await harness.restore();
+  }
+});
+
+test('an already-paid order cannot be initialized again', async () => {
+  const harness = makeHarness();
+  harness.order.status = 'paid';
+  harness.order.paymentStatus = 'paid';
+  try {
+    await assert.rejects(invoke(), (error) => error.statusCode === 409);
+    assert.equal(harness.payments.size, 0);
+    assert.equal(harness.counts().gatewayRequests, 0);
+    assert.equal(harness.order.status, 'paid');
   } finally {
     await harness.restore();
   }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useBackendConnection } from '../../context/BackendConnectionContext.jsx';
@@ -27,6 +27,7 @@ export default function Checkout() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null); // { message, code }
   const [created, setCreated] = useState(null); // { order, token, idempotencyKey }
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     setEmail(user?.email || '');
@@ -64,6 +65,7 @@ export default function Checkout() {
   if (!pkg || !draft?.recipientPhone) return null;
 
   const handlePay = async () => {
+    if (submittingRef.current) return;
     setError(null);
     if (!connection.isConnected) {
       setError({ message: connection.message });
@@ -83,11 +85,12 @@ export default function Checkout() {
       return;
     }
 
+    submittingRef.current = true;
     setSubmitting(true);
+    let current = created;
     try {
       const trimmedEmail = email.trim();
       // Step 1: create the order once. A retry only repeats the payment step.
-      let current = created;
       if (!current) {
         const idempotencyKey = getCheckoutIdempotencyKey({
           packageId: pkg._id,
@@ -104,8 +107,15 @@ export default function Checkout() {
           contactEmail: trimmedEmail || undefined,
           idempotencyKey,
         });
+        if (response?.pending && !response.order) {
+          setError({
+            code: 'PURCHASE_PROCESSING',
+            message: response.message || 'Your request is still processing. Wait briefly, then retry this same checkout. It will reuse the same purchase request.',
+          });
+          return;
+        }
         if (!response?.order) {
-          throw new Error('The order could not be created. Please try again.');
+          throw new Error('We could not confirm the order response. Retry this same checkout so we can safely check the existing request.');
         }
         current = { order: response.order, token: response.trackingToken || null, idempotencyKey: response.idempotencyKey || idempotencyKey };
         setCreated(current);
@@ -127,7 +137,7 @@ export default function Checkout() {
       const successUrl = `/order-success?orderId=${current.order._id}`;
 
       // Wallet orders are already paid by the time createOrder returns.
-      if (method === 'wallet') {
+      if (method === 'wallet' || !['pending', 'payment_pending'].includes(current.order.status)) {
         clearCheckoutIdempotencyKey();
         clearDraft();
         navigate(successUrl);
@@ -140,15 +150,36 @@ export default function Checkout() {
         trackingToken: current.token || undefined,
       });
 
+      if (payment?.pending) {
+        clearCheckoutIdempotencyKey();
+        clearDraft();
+        navigate(successUrl);
+        return;
+      }
+
+      if (!payment?.payment?.authorizationUrl) {
+        throw new Error('The order is saved, but payment setup is still being checked. Do not start a new purchase. View the order status and retry payment only from that order.');
+      }
+
       clearCheckoutIdempotencyKey();
       clearDraft();
-      if (payment.payment?.authorizationUrl) {
-        window.location.assign(payment.payment.authorizationUrl);
-      } else {
-        navigate(successUrl);
-      }
+      window.location.assign(payment.payment.authorizationUrl);
     } catch (err) {
-      setError({ message: getErrorMessage(err), code: getErrorCode(err) });
+      const code = getErrorCode(err);
+      const message = code === 'PRIMARY_SUPPLIER_UNAVAILABLE'
+        ? 'This bundle is temporarily unavailable from the supplier. No payment was started. You can retry this same checkout later or choose another bundle.'
+        : code === 'PAYMENT_INITIALIZATION_REJECTED'
+          ? 'Paystack did not create a payment session, so no payment was taken. You can safely retry payment for this same order.'
+        : code === 'PAYMENT_PROVIDER_ERROR'
+          ? 'We could not confirm payment setup. Do not start a new purchase. Your existing order and payment reference are being preserved; check its status or retry from that order.'
+        : !err?.response
+          ? current
+            ? 'Your order is saved, but we could not confirm payment setup. Do not create a new purchase. View the order status or retry payment for this order.'
+            : 'We could not confirm the request result. It may still be processing. Retry this same checkout; it uses the same purchase request and will not create a duplicate order.'
+          : getErrorMessage(err);
+      setError({ message, code });
+    } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -274,6 +305,7 @@ export default function Checkout() {
             className="btn btn--primary btn--lg btn--block"
             onClick={handlePay}
             disabled={submitting || !connection.isConnected || paymentConfig.loading || Boolean(paymentConfig.error) || (method === 'direct' ? !canPayDirect : !canPayWallet)}
+            aria-busy={submitting}
           >
             {submitting ? 'Please wait...' : `Pay ${formatCurrency(finalPayable)}`}
           </button>

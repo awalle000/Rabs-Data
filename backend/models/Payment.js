@@ -15,7 +15,7 @@ const paymentSchema = new mongoose.Schema(
     accessCode: { type: String },
     hubtelTransactionId: { type: String, index: true },
     providerMetadata: { type: mongoose.Schema.Types.Mixed },
-    initializationState: { type: String, enum: ['created', 'in_progress', 'uncertain', 'ready'], default: 'created', index: true },
+    initializationState: { type: String, enum: ['created', 'in_progress', 'uncertain', 'ready', 'failed'], default: 'created', index: true },
     walletFundingActive: { type: Boolean, default: false },
     channel: { type: String },
     paymentGatewayFee: { type: Number, default: 0 },

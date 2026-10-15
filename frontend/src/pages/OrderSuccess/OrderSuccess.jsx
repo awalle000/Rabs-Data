@@ -130,12 +130,24 @@ export default function OrderSuccess() {
     setPaying(true);
     try {
       const response = await paymentService.initializePayment({ orderId: id, trackingToken: token || undefined });
+      if (response?.pending) {
+        setPayError(response.message || 'Payment setup is still being checked. Do not start a new purchase; this order will keep its existing payment reference.');
+        setPaying(false);
+        return;
+      }
+      if (!response?.payment?.authorizationUrl) {
+        throw new Error('Payment setup could not be confirmed. Do not create another order. Check this order again shortly.');
+      }
       window.location.assign(response.payment.authorizationUrl);
     } catch (err) {
       setPayError(
         getErrorCode(err) === 'PAYMENT_PROVIDER_UNAVAILABLE'
           ? 'Online payment is not available yet because no payment provider is connected.'
-          : getErrorMessage(err)
+          : getErrorCode(err) === 'PAYMENT_INITIALIZATION_REJECTED'
+            ? 'Paystack did not create a payment session, so no payment was taken. You can safely retry payment for this same order.'
+          : getErrorCode(err) === 'PAYMENT_PROVIDER_ERROR'
+            ? 'Payment setup could not be confirmed. Do not create another order; this order keeps its existing payment reference. Check the status again shortly.'
+            : getErrorMessage(err)
       );
       setPaying(false);
     }
