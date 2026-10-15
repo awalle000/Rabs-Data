@@ -42,7 +42,9 @@ const asStatus = (state) => ({
 
 const normalizedRestrictions = (value) => Array.isArray(value) ? [...value].map(String).sort() : null;
 
-export const isEligiblePadodaPackage = (packageRecord, now = Date.now()) => {
+export const isEligiblePadodaPackage = (packageRecord, now = Date.now(), {
+  requireFreshVerification = true,
+} = {}) => {
   const offer = packageRecord?.supplierOffers?.padodatagh;
   const verifiedAt = offer?.lastVerifiedAt ? new Date(offer.lastVerifiedAt).getTime() : 0;
   const fresh = verifiedAt > 0 && now - verifiedAt <= 30 * 60 * 1000;
@@ -55,7 +57,7 @@ export const isEligiblePadodaPackage = (packageRecord, now = Date.now()) => {
     Number.isFinite(Number(packageRecord.providerCost)) &&
     Number(packageRecord.providerCost) === Number(offer.supplierCost) &&
     Number(packageRecord.sellingPrice) >= Number(offer.supplierCost) &&
-    fresh && supplierOfferMatchesPackage(packageRecord, offer)
+    (!requireFreshVerification || fresh) && supplierOfferMatchesPackage(packageRecord, offer)
   );
 };
 

@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 process.env.MONGODB_URI = 'mongodb://127.0.0.1:27017/rabsdata-test';
 process.env.JWT_SECRET = 'test-only-not-a-secret';
 process.env.PADODATAGH_API_KEY = 'catalog-sync-test-key';
+process.env.SUPPLIER_CATALOG_REFRESH_ENABLED = 'false';
 
 const [
   { default: DataPackage },
@@ -235,7 +236,7 @@ test('catalog synchronization rejects retired supplier sources', async () => {
   await assert.rejects(syncSupplierOffers({ supplier: 'retired-supplier' }), /Only PadodaTagh catalog sync is supported/);
 });
 
-test('checkout requires a fresh current PadodaTagh slug, cost, price and verified bundle identity', () => {
+test('verified bundle eligibility survives a paused refresh while enabled refresh requires freshness', () => {
   const packageRecord = {
     network: 'MTN', volumeInMB: 1000, validity: 'Non-expiry', bundleType: 'standard', restrictions: [],
     providerPackageCode: 'offer-slug', providerCost: 5, sellingPrice: 10,
@@ -249,7 +250,9 @@ test('checkout requires a fresh current PadodaTagh slug, cost, price and verifie
   assert.equal(isEligiblePadodaPackage({ ...packageRecord, providerCost: 6 }), false);
   assert.equal(isEligiblePadodaPackage({ ...packageRecord, sellingPrice: 4 }), false);
   assert.equal(isEligiblePadodaPackage({ ...packageRecord, validity: 'Unknown' }), false);
-  assert.equal(isEligiblePadodaPackage({ ...packageRecord, supplierOffers: { padodatagh: { ...packageRecord.supplierOffers.padodatagh, lastVerifiedAt: new Date(Date.now() - 31 * 60 * 1000) } } }), false);
+  const staleVerified = { ...packageRecord, supplierOffers: { padodatagh: { ...packageRecord.supplierOffers.padodatagh, lastVerifiedAt: new Date(Date.now() - 31 * 60 * 1000) } } };
+  assert.equal(isEligiblePadodaPackage(staleVerified), false);
+  assert.equal(isEligiblePadodaPackage(staleVerified, Date.now(), { requireFreshVerification: true }), false);
   assert.equal(isEligiblePadodaPackage({ ...packageRecord, supplierOffers: { padodatagh: { ...packageRecord.supplierOffers.padodatagh, restrictions: null } } }), false);
   assert.equal(isEligiblePadodaPackage({ ...packageRecord, supplierOffers: { padodatagh: { ...packageRecord.supplierOffers.padodatagh, catalogVerified: false } } }), false);
   assert.equal(isEligiblePadodaPackage({ ...packageRecord, supplierOffers: { padodatagh: { ...packageRecord.supplierOffers.padodatagh, catalogVerified: undefined } } }), false);

@@ -1,5 +1,6 @@
 import DataPackage from '../models/DataPackage.js';
 import CatalogSyncState from '../models/CatalogSyncState.js';
+import env from '../config/environment.js';
 import { getEnabledNetworks, getEnabledNetworkCodes } from '../config/networks.js';
 import { isEligiblePadodaPackage } from '../services/supplierCatalogService.js';
 import AppError from '../utils/AppError.js';
@@ -7,12 +8,12 @@ import asyncHandler from '../utils/asyncHandler.js';
 
 const CATALOG_FIELDS = '_id network name dataAmount validity bundleType restrictions sellingPrice volumeInMB providerCost providerPackageCode providerPlanId supplierOffers.padodatagh';
 
-const findEligiblePackages = async (filter) => {
+const findEligiblePackages = async (filter, { requireFreshVerification = true } = {}) => {
   const packages = await DataPackage.find(filter)
     .select(CATALOG_FIELDS)
     .sort({ network: 1, sellingPrice: 1 })
     .lean();
-  return packages.filter((packageRecord) => isEligiblePadodaPackage(packageRecord));
+  return packages.filter((packageRecord) => isEligiblePadodaPackage(packageRecord, Date.now(), { requireFreshVerification }));
 };
 
 const toPublicPackage = ({ providerCost, providerPackageCode, providerPlanId, supplierOffers, __v, createdAt, updatedAt, ...packageRecord }) => packageRecord;
@@ -30,14 +31,19 @@ const catalogPublicationState = async () => {
     error.retryAfterSeconds = 15;
     throw error;
   }
-  return state ? [state.status, state.lastStartedAt, state.lastFinishedAt, state.lastSuccessfulAt, state.lockToken].join('|') : null;
+  const allowStoredVerification = !env.supplierCatalogRefreshEnabled
+    && !['syncing', 'error'].includes(state?.status);
+  return {
+    version: state ? [state.status, state.lastStartedAt, state.lastFinishedAt, state.lastSuccessfulAt, state.lockToken].join('|') : null,
+    requireFreshVerification: !allowStoredVerification,
+  };
 };
 
 export const assertCatalogPublicationReady = async () => catalogPublicationState();
 
 const assertCatalogPublicationUnchanged = async (before) => {
   const after = await catalogPublicationState();
-  if (before !== after) {
+  if (before.version !== after.version) {
     const error = new AppError(
       'The data catalog changed during refresh. Please retry shortly.',
       503,
@@ -61,14 +67,17 @@ const buildNetworkCounts = (eligiblePackages) => {
 };
 
 export const getNetworks = asyncHandler(async (req, res) => {
-  const publicationVersion = await assertCatalogPublicationReady();
-  const eligiblePackages = await findEligiblePackages({ isActive: true, network: { $in: getEnabledNetworkCodes() } });
-  await assertCatalogPublicationUnchanged(publicationVersion);
+  const publicationState = await assertCatalogPublicationReady();
+  const eligiblePackages = await findEligiblePackages(
+    { isActive: true, network: { $in: getEnabledNetworkCodes() } },
+    { requireFreshVerification: publicationState.requireFreshVerification }
+  );
+  await assertCatalogPublicationUnchanged(publicationState);
   res.json({ success: true, networks: buildNetworkCounts(eligiblePackages) });
 });
 
 export const getPackages = asyncHandler(async (req, res) => {
-  const publicationVersion = await assertCatalogPublicationReady();
+  const publicationState = await assertCatalogPublicationReady();
   const enabled = getEnabledNetworkCodes();
   const filter = { isActive: true, network: { $in: enabled } };
 
@@ -76,19 +85,28 @@ export const getPackages = asyncHandler(async (req, res) => {
     filter.network = req.query.network;
   }
 
-  const packages = (await findEligiblePackages(filter)).map(toPublicPackage);
+  const packages = (await findEligiblePackages(filter, {
+    requireFreshVerification: publicationState.requireFreshVerification,
+  })).map(toPublicPackage);
 
-  await assertCatalogPublicationUnchanged(publicationVersion);
+  await assertCatalogPublicationUnchanged(publicationState);
   res.json({ success: true, count: packages.length, packages });
 });
 
 export const getCatalog = asyncHandler(async (req, res) => {
-  const publicationVersion = await assertCatalogPublicationReady();
-  const eligiblePackages = await findEligiblePackages({ isActive: true, network: { $in: getEnabledNetworkCodes() } });
+  const publicationState = await assertCatalogPublicationReady();
+  const eligiblePackages = await findEligiblePackages(
+    { isActive: true, network: { $in: getEnabledNetworkCodes() } },
+    { requireFreshVerification: publicationState.requireFreshVerification }
+  );
   const packages = eligiblePackages.map(toPublicPackage);
-  await assertCatalogPublicationUnchanged(publicationVersion);
+  await assertCatalogPublicationUnchanged(publicationState);
   res.json({
     success: true,
+    catalogStatus: packages.length ? 'available' : 'no_eligible_packages',
+    catalogMessage: packages.length
+      ? ''
+      : 'No active packages currently pass supplier verification and pricing checks.',
     networks: buildNetworkCounts(eligiblePackages),
     count: packages.length,
     packages,

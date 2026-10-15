@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.ENABLED_NETWORKS = 'MTN,Telecel,AirtelTigo';
+process.env.SUPPLIER_CATALOG_REFRESH_ENABLED = 'false';
 
 const [{ default: DataPackage }, { default: CatalogSyncState }, { getCatalog, getNetworks, getPackages }] = await Promise.all([
   import('../models/DataPackage.js'),
@@ -72,7 +73,19 @@ test('customer catalog endpoint only returns eligible PadodaTagh offers and matc
     _id: 'stale-padoda',
     supplierOffers: { padodatagh: { ...makePackage('MTN').supplierOffers.padodatagh, lastVerifiedAt: new Date(Date.now() - 31 * 60 * 1000) } },
   });
-  const records = [...eligible, remadataLegacy, ambiguous, unverified, stale];
+  const badIdentity = makePackage('MTN', {
+    _id: 'bad-identity',
+    providerPackageCode: 'different-package-code',
+  });
+  const badCost = makePackage('MTN', {
+    _id: 'bad-cost',
+    providerCost: 6,
+  });
+  const badPrice = makePackage('MTN', {
+    _id: 'bad-price',
+    sellingPrice: 3,
+  });
+  const records = [...eligible, remadataLegacy, ambiguous, unverified, stale, badIdentity, badCost, badPrice];
   const queries = [];
   CatalogSyncState.findOne = () => ({ lean: async () => null });
   DataPackage.find = (filter) => {
@@ -92,8 +105,8 @@ test('customer catalog endpoint only returns eligible PadodaTagh offers and matc
 
   try {
     const packages = await callController(getPackages, { query: {} });
-    assert.equal(packages.count, 3);
-    assert.deepEqual(packages.packages.map((item) => item._id), eligible.map((item) => item._id));
+    assert.equal(packages.count, 4);
+    assert.deepEqual(packages.packages.map((item) => item._id), [...eligible, stale].map((item) => item._id));
     assert.ok(packages.packages.every((item) => !('providerCost' in item)
       && !('providerPackageCode' in item) && !('supplierOffers' in item)));
 
@@ -103,15 +116,77 @@ test('customer catalog endpoint only returns eligible PadodaTagh offers and matc
 
     const networks = await callController(getNetworks, { query: {} });
     assert.deepEqual(networks.networks.map((item) => item.code), ['MTN', 'Telecel', 'AirtelTigo']);
-    assert.deepEqual(networks.networks.map((item) => item.packageCount), [1, 1, 1]);
+    assert.deepEqual(networks.networks.map((item) => item.packageCount), [2, 1, 1]);
     assert.deepEqual(queries[2].network.$in, ['MTN', 'Telecel', 'AirtelTigo']);
 
     queries.length = 0;
     const catalog = await callController(getCatalog, { query: {} });
     assert.equal(queries.length, 1);
-    assert.equal(catalog.count, 3);
-    assert.deepEqual(catalog.networks.map((item) => item.packageCount), [1, 1, 1]);
-    assert.deepEqual(catalog.packages.map((item) => item._id), eligible.map((item) => item._id));
+    assert.equal(catalog.count, 4);
+    assert.equal(catalog.catalogStatus, 'available');
+    assert.deepEqual(catalog.networks.map((item) => item.packageCount), [2, 1, 1]);
+    assert.deepEqual(catalog.packages.map((item) => item._id), [...eligible, stale].map((item) => item._id));
+  } finally {
+    DataPackage.find = originals.find;
+    CatalogSyncState.findOne = originals.catalogFindOne;
+  }
+});
+
+test('public catalog serves existing verified active bundles with an old successful refresh while refresh is paused', async () => {
+  const originals = { find: DataPackage.find, catalogFindOne: CatalogSyncState.findOne };
+  const existing = makePackage('MTN', {
+    supplierOffers: { padodatagh: {
+      ...makePackage('MTN').supplierOffers.padodatagh,
+      lastVerifiedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+    } },
+  });
+  CatalogSyncState.findOne = () => ({ lean: async () => ({
+    status: 'idle',
+    lastSuccessfulAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+  }) });
+  DataPackage.find = () => {
+    const chain = { select() { return chain; }, sort() { return chain; }, lean: async () => [existing] };
+    return chain;
+  };
+
+  try {
+    const catalog = await callController(getCatalog, { query: {} });
+    assert.equal(catalog.success, true);
+    assert.equal(catalog.count, 1);
+    assert.deepEqual(catalog.packages.map((item) => item._id), [existing._id]);
+    assert.equal(catalog.networks.find(({ code }) => code === 'MTN').packageCount, 1);
+  } finally {
+    DataPackage.find = originals.find;
+    CatalogSyncState.findOne = originals.catalogFindOne;
+  }
+});
+
+test('empty public catalog reports that no package passed integrity checks', async () => {
+  const originals = { find: DataPackage.find, catalogFindOne: CatalogSyncState.findOne };
+  const invalidPackages = [
+    makePackage('MTN', { isActive: false }),
+    makePackage('Telecel', { _id: 'bad-identity', providerPackageCode: 'changed-code' }),
+    makePackage('MTN', { _id: 'bad-cost', providerCost: 5 }),
+    makePackage('MTN', { _id: 'bad-price', sellingPrice: 3 }),
+    makePackage('MTN', { _id: 'unverified', supplierOffers: { padodatagh: { ...makePackage('MTN').supplierOffers.padodatagh, catalogVerified: false } } }),
+  ];
+  CatalogSyncState.findOne = () => ({ lean: async () => null });
+  DataPackage.find = (filter) => {
+    const chain = {
+      select() { return chain; },
+      sort() { return chain; },
+      lean: async () => invalidPackages.filter((packageRecord) => packageRecord.isActive === filter.isActive),
+    };
+    return chain;
+  };
+
+  try {
+    const catalog = await callController(getCatalog, { query: {} });
+    assert.equal(catalog.success, true);
+    assert.equal(catalog.count, 0);
+    assert.deepEqual(catalog.packages, []);
+    assert.equal(catalog.catalogStatus, 'no_eligible_packages');
+    assert.match(catalog.catalogMessage, /supplier verification and pricing checks/);
   } finally {
     DataPackage.find = originals.find;
     CatalogSyncState.findOne = originals.catalogFindOne;

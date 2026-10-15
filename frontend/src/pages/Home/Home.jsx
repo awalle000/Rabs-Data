@@ -126,7 +126,11 @@ export default function Home() {
         </h2>
         {!connection.isWaiting && !connection.isOffline && !connection.isUnavailable && loading && <Loader label="Loading bundles..." />}
         {data && popular.length === 0 && (
-          <EmptyState icon="package" title="Bundles are coming soon" message="Check back shortly for available data bundles." />
+          <EmptyState
+            icon="package"
+            title="Bundles are coming soon"
+            message={data.catalogMessage || 'Check back shortly for available data bundles.'}
+          />
         )}
         {popular.length > 0 && (
           <div className="home-packages">
