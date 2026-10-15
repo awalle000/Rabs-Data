@@ -42,24 +42,29 @@ const asStatus = (state) => ({
 
 const normalizedRestrictions = (value) => Array.isArray(value) ? [...value].map(String).sort() : null;
 
-export const isEligiblePadodaPackage = (packageRecord, now = Date.now(), {
+export const getPadodaPackageEligibility = (packageRecord, now = Date.now(), {
   requireFreshVerification = true,
 } = {}) => {
   const offer = packageRecord?.supplierOffers?.padodatagh;
   const verifiedAt = offer?.lastVerifiedAt ? new Date(offer.lastVerifiedAt).getTime() : 0;
   const fresh = verifiedAt > 0 && now - verifiedAt <= 30 * 60 * 1000;
-  return Boolean(
-    packageRecord && offer?.packageCode &&
-    offer.catalogVerified === true &&
-    packageRecord.providerPackageCode === offer.packageCode &&
-    (!offer.planId || packageRecord.providerPlanId === offer.planId) &&
-    offer.supplierCost != null && Number.isFinite(Number(offer.supplierCost)) &&
-    Number.isFinite(Number(packageRecord.providerCost)) &&
-    Number(packageRecord.providerCost) === Number(offer.supplierCost) &&
-    Number(packageRecord.sellingPrice) >= Number(offer.supplierCost) &&
-    (!requireFreshVerification || fresh) && supplierOfferMatchesPackage(packageRecord, offer)
-  );
+  const failures = [];
+  if (!packageRecord || !offer?.packageCode) failures.push('supplier_offer_missing');
+  if (offer?.catalogVerified !== true) failures.push('catalog_not_verified');
+  if (packageRecord && offer?.packageCode && packageRecord.providerPackageCode !== offer.packageCode) failures.push('package_code_mismatch');
+  if (packageRecord && offer?.planId && packageRecord.providerPlanId !== offer.planId) failures.push('plan_id_mismatch');
+  if (offer?.supplierCost == null || !Number.isFinite(Number(offer?.supplierCost))) failures.push('supplier_cost_invalid');
+  if (!Number.isFinite(Number(packageRecord?.providerCost))) failures.push('package_cost_invalid');
+  if (offer?.supplierCost != null && Number.isFinite(Number(packageRecord?.providerCost))
+    && Number(packageRecord.providerCost) !== Number(offer.supplierCost)) failures.push('supplier_cost_mismatch');
+  if (offer?.supplierCost != null && Number(packageRecord?.sellingPrice) < Number(offer.supplierCost)) failures.push('retail_price_below_supplier_cost');
+  if (requireFreshVerification && !fresh) failures.push('verification_stale');
+  if (packageRecord && offer && !supplierOfferMatchesPackage(packageRecord, offer)) failures.push('offer_integrity_mismatch');
+  return { eligible: failures.length === 0, failures };
 };
+
+export const isEligiblePadodaPackage = (packageRecord, now = Date.now(), options) =>
+  getPadodaPackageEligibility(packageRecord, now, options).eligible;
 
 export const supplierOfferMatchesPackage = (packageRecord, offer) => {
   const packageRestrictions = normalizedRestrictions(packageRecord?.restrictions);

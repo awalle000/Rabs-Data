@@ -177,7 +177,10 @@ export default function Checkout() {
             ? 'Your order is saved, but we could not confirm payment setup. Do not create a new purchase. View the order status or retry payment for this order.'
             : 'We could not confirm the request result. It may still be processing. Retry this same checkout; it uses the same purchase request and will not create a duplicate order.'
           : getErrorMessage(err);
-      setError({ message, code });
+      const diagnosticId = typeof err?.response?.data?.diagnosticId === 'string'
+        ? err.response.data.diagnosticId
+        : null;
+      setError({ message, code, diagnosticId });
     } finally {
       submittingRef.current = false;
       setSubmitting(false);
@@ -291,6 +294,7 @@ export default function Checkout() {
                   <Link to="/track">Check your orders</Link>
                 </>
               )}
+              {error.diagnosticId && <small> Support code: {error.diagnosticId}</small>}
               {orderLink && (
                 <>
                   {' '}

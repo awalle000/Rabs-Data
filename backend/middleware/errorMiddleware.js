@@ -54,6 +54,7 @@ export const errorHandler = (err, req, res, next) => {
     success: false,
     message: statusCode >= 500 && !catalogRefresh ? 'Something went wrong' : handled.message,
     ...(handled.code ? { code: handled.code } : {}),
+    ...(handled.diagnosticId ? { diagnosticId: handled.diagnosticId } : {}),
     ...(handled.details ? { errors: handled.details } : {}),
   });
 };

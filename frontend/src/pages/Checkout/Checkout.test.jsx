@@ -115,3 +115,30 @@ it('does not initialize Paystack when supplier preflight rejects the selected pa
   expect(state.initializePayment).not.toHaveBeenCalled();
   expect(state.navigate).not.toHaveBeenCalled();
 });
+
+it('renders a safe fallback for a malformed 503 body without throwing on optional fields', async () => {
+  state.createOrder.mockRejectedValue(Object.assign(new Error('Request failed'), {
+    response: { status: 503, data: undefined },
+  }));
+  render(<Checkout />);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Pay GH₵10.00' }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(/request result|server encountered an error/i);
+  expect(state.initializePayment).not.toHaveBeenCalled();
+});
+
+it('renders the safe support code from a supplier preflight error', async () => {
+  state.createOrder.mockRejectedValue(Object.assign(new Error('Unavailable'), {
+    response: {
+      status: 503,
+      data: { code: 'PRIMARY_SUPPLIER_UNAVAILABLE', diagnosticId: 'diagnostic-123' },
+    },
+  }));
+  render(<Checkout />);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Pay GH₵10.00' }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Support code: diagnostic-123');
+  expect(state.initializePayment).not.toHaveBeenCalled();
+});

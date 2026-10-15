@@ -60,3 +60,30 @@ test('catalog refresh gate returns a safe retryable message and Retry-After head
   assert.match(body.message, /catalog is being refreshed/i);
   assert.equal(JSON.stringify(body).includes('refresh active'), false);
 });
+
+test('supplier preflight response returns only the diagnostic correlation ID, not eligibility data', () => {
+  let statusCode;
+  let body;
+  const diagnosticId = '59bb40b1-3270-4b68-b8e7-82fe2dde2862';
+  errorHandler(
+    Object.assign(new Error('This package is not currently available from the primary supplier.'), {
+      isOperational: true,
+      statusCode: 503,
+      code: 'PRIMARY_SUPPLIER_UNAVAILABLE',
+      diagnosticId,
+      rules: ['verification_stale'],
+    }),
+    { method: 'POST', path: '/api/orders' },
+    {
+      status(code) { statusCode = code; return this; },
+      json(value) { body = value; return value; },
+    },
+    () => {}
+  );
+
+  assert.equal(statusCode, 503);
+  assert.equal(body.code, 'PRIMARY_SUPPLIER_UNAVAILABLE');
+  assert.equal(body.diagnosticId, diagnosticId);
+  assert.equal('rules' in body, false);
+  assert.equal(JSON.stringify(body).includes('verification_stale'), false);
+});

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import Order, { ORDER_STATUSES } from '../models/Order.js';
 import DataPackage from '../models/DataPackage.js';
 import env from '../config/environment.js';
@@ -17,13 +18,21 @@ import { notifyAdminsSafely } from '../services/adminNotificationService.js';
 import { orderCreatedNotification } from '../services/adminNotificationEvents.js';
 import { getSupplierControl } from '../services/supplierControlService.js';
 import * as dataProvider from '../services/dataProviderService.js';
-import { isEligiblePadodaPackage } from '../services/supplierCatalogService.js';
+import { getPadodaPackageEligibility } from '../services/supplierCatalogService.js';
 
 const ACTIVE_STATUSES = ['pending', 'payment_pending', 'paid', 'processing'];
 const DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
 const OBJECT_ID = /^[a-f\d]{24}$/i;
 
 const inFlightOrders = new Set();
+const supplierPreflightError = (reason, message, rules = []) => {
+  const diagnosticId = randomUUID();
+  console.warn('[order-preflight] supplier unavailable', { diagnosticId, reason, rules });
+  const error = new AppError(message, 503, 'PRIMARY_SUPPLIER_UNAVAILABLE');
+  error.diagnosticId = diagnosticId;
+  return error;
+};
+
 const parseVolumeInMB = (value) => {
   const match = String(value || '').trim().match(/^([\d.]+)\s*(gb|mb)?$/i);
   if (!match) return 0;
@@ -43,11 +52,11 @@ export const createOrder = asyncHandler(async (req, res) => {
     throw new AppError('An idempotency key is required for order creation.', 400, 'IDEMPOTENCY_KEY_REQUIRED');
   }
   if (!dataProvider.isDataProviderConfigured('PadodaTagh')) {
-    throw new AppError('Data purchases are temporarily unavailable because the primary supplier is not configured.', 503, 'PRIMARY_SUPPLIER_UNAVAILABLE');
+    throw supplierPreflightError('supplier_not_configured', 'Data purchases are temporarily unavailable because the primary supplier is not configured.');
   }
   const supplierControl = await getSupplierControl();
   if (supplierControl.suppliers?.padodatagh?.enabled === false) {
-    throw new AppError('Data purchases are temporarily unavailable from the primary supplier.', 503, 'PRIMARY_SUPPLIER_UNAVAILABLE');
+    throw supplierPreflightError('supplier_disabled', 'Data purchases are temporarily unavailable from the primary supplier.');
   }
 
   const operationState = await getPurchaseOperationState({
@@ -110,13 +119,15 @@ export const createOrder = asyncHandler(async (req, res) => {
   if (!dataPackage) throw new AppError('This data package is not available', 404, 'INVALID_PACKAGE');
 
   const primaryOffer = dataPackage.supplierOffers?.padodatagh;
-  if (!isEligiblePadodaPackage(dataPackage)) {
+  const eligibility = getPadodaPackageEligibility(dataPackage);
+  if (!eligibility.eligible) {
+    const preflightError = supplierPreflightError('package_ineligible', 'This package is not currently available from the primary supplier.', eligibility.failures);
     await markPurchaseOperationCompleted({
       key: operationState.key,
       status: 'failed',
-      payload: { packageId: String(packageId), recipientPhone, paymentMethod, reason: 'primary_offer_unavailable_or_stale' },
+      payload: { reason: 'primary_offer_unavailable_or_stale', diagnosticId: preflightError.diagnosticId, rules: eligibility.failures },
     });
-    throw new AppError('This package is not currently available from the primary supplier.', 503, 'PRIMARY_SUPPLIER_UNAVAILABLE');
+    throw preflightError;
   }
 
   const contactPhone = req.body.contactPhone || buyer?.phone || recipientPhone;
