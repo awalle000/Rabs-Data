@@ -178,11 +178,19 @@ export const canAdminReconcileFailedOrder = (order) =>
   && order.paymentStatus === 'paid'
   && order.paymentMethod === 'direct';
 
-export const applyProviderResult = async (order, result, { allowFailedPaidDirectOrder = false } = {}) => {
+export const applyProviderResult = async (order, result, {
+  allowFailedPaidDirectOrder = false,
+  expectedUpdatedAt,
+  expectedReconcileLeaseToken,
+} = {}) => {
   const allowFailedOrder = allowFailedPaidDirectOrder && canAdminReconcileFailedOrder(order);
   const applicableStatuses = allowFailedOrder
     ? { $in: ['processing', 'paid', 'failed'] }
     : { $in: ['processing', 'paid'] };
+  const expectedVersion = {
+    ...(expectedUpdatedAt ? { updatedAt: expectedUpdatedAt } : {}),
+    ...(expectedReconcileLeaseToken ? { supplierReconcileLeaseToken: expectedReconcileLeaseToken } : {}),
+  };
   const supplierRef = result.providerReference || order.providerReference || order.supplierReference;
   const returnedCost = result.supplierCost ?? result.amount;
   const supplierCost = returnedCost !== undefined && Number.isFinite(Number(returnedCost)) && Number(returnedCost) >= 0
@@ -215,14 +223,14 @@ export const applyProviderResult = async (order, result, { allowFailedPaidDirect
   if (result.status === 'successful' || supplierStatus === 'completed') {
     if (order.status === 'successful') {
       await Order.updateOne(
-        { _id: order._id, status: 'successful' },
+        { _id: order._id, status: 'successful', ...expectedVersion },
         { $set: { ...baseUpdates, needsReview: false, refundRequired: false }, $unset: { failureReason: 1 } }
       );
       return Order.findById(order._id);
     }
 
     const updated = await Order.findOneAndUpdate(
-      { _id: order._id, status: applicableStatuses },
+      { _id: order._id, status: applicableStatuses, ...expectedVersion },
       {
         $set: {
           ...baseUpdates,
@@ -250,7 +258,7 @@ export const applyProviderResult = async (order, result, { allowFailedPaidDirect
       ? 'Data delivery could not be completed by supplier. Transaction refunded.'
       : (result.message || 'Data delivery failed. Please contact support.');
     const failed = await Order.findOneAndUpdate(
-      { _id: order._id, status: applicableStatuses },
+      { _id: order._id, status: applicableStatuses, ...expectedVersion },
       { $set: { ...baseUpdates, status: order.paymentMethod === 'wallet' ? 'refunded' : 'failed', ...(order.paymentMethod === 'wallet' ? { paymentStatus: 'refunded' } : {}), failureReason: reason, refundRequired: true, completedAt: new Date() } },
       { returnDocument: 'after' }
     );
@@ -274,7 +282,7 @@ export const applyProviderResult = async (order, result, { allowFailedPaidDirect
   }
 
   // Still pending / processing
-  await Order.updateOne({ _id: order._id, status: applicableStatuses }, { $set: baseUpdates });
+  await Order.updateOne({ _id: order._id, status: applicableStatuses, ...expectedVersion }, { $set: baseUpdates });
   return Order.findById(order._id);
 };
 

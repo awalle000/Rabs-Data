@@ -5,6 +5,7 @@ const get = (url, params) => api.get(url, { params }).then((res) => res.data);
 export const getDashboard = () => get('/admin/dashboard');
 
 export const getOrders = (params) => get('/admin/orders', params);
+export const getStaleSupplierOrders = (params) => get('/admin/orders/stale-supplier', params);
 export const getOrderDetails = (id) => get(`/admin/orders/${id}`);
 
 export const getCustomers = (params) => get('/admin/customers', params);

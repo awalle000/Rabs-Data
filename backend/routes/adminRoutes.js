@@ -2,6 +2,7 @@ import express from 'express';
 import {
   getDashboard,
   getOrders,
+  getStaleSupplierOrders,
   getOrderDetails,
   getCustomers,
   creditCustomerWallet,
@@ -66,6 +67,7 @@ router.get('/dashboard', getDashboard);
 router.post('/register-admin', registerRules, validate, registerAdmin);
 
 router.get('/orders', getOrders);
+router.get('/orders/stale-supplier', getStaleSupplierOrders);
 router.get('/orders/:id', orderIdParam, validate, getOrderDetails);
 router.post('/orders/:id/check-supplier-status', orderIdParam, validate, checkOrderSupplierStatus);
 

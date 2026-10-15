@@ -156,13 +156,22 @@ export const safeReconcileSupplierOrder = async ({ order }) => {
   const decision = classifySupplierResult({ order, result: status });
 
   if (decision.action === 'apply_supplier_result') {
-    const updated = await applyProviderResult(order, status);
+    const updated = await applyProviderResult(order, status, {
+      expectedUpdatedAt: order.updatedAt,
+      expectedReconcileLeaseToken: order.supplierReconcileLeaseToken,
+    });
     return { action: 'updated', order: updated, reason: decision.reason };
   }
 
   if (decision.action === 'review') {
     await Order.updateOne(
-      { _id: order._id },
+      {
+        _id: order._id,
+        status: 'processing',
+        supplierSubmitted: true,
+        ...(order.updatedAt ? { updatedAt: order.updatedAt } : {}),
+        ...(order.supplierReconcileLeaseToken ? { supplierReconcileLeaseToken: order.supplierReconcileLeaseToken } : {}),
+      },
       {
         $set: {
           needsReview: true,

@@ -28,6 +28,42 @@ test('Order purchaseOperation has one unique partial index for ObjectId referenc
   ]]);
 });
 
+test('supplier reconciliation claim index is scoped to active PadodaTagh processing orders', () => {
+  assert.deepEqual(indexesFor(Order.schema, 'supplierReconcileNextCheckAt'), [[
+    {
+      supplier: 1,
+      supplierSubmitted: 1,
+      status: 1,
+      supplierStatus: 1,
+      supplierReconcileNextCheckAt: 1,
+      createdAt: 1,
+    },
+    { partialFilterExpression: { supplier: 'PadodaTagh', supplierSubmitted: true, status: 'processing' } },
+  ]]);
+});
+
+test('customer order serialization excludes reconciliation scheduling and lease fields', () => {
+  const order = new Order({
+    orderId: 'DH-RECONCILE-1',
+    network: 'MTN',
+    dataPackage: '64d9e76af742f8ab3f1e29d2',
+    packageName: 'MTN 1GB',
+    dataAmount: '1GB',
+    validity: 'Non-expiry',
+    recipientPhone: '0240000000',
+    sellingPrice: 10,
+    providerCost: 5,
+    profit: 5,
+    supplierReconcileNextCheckAt: new Date(),
+    supplierReconcileLeaseToken: 'internal-claim-token',
+    supplierReconcileLeaseUntil: new Date(),
+  });
+
+  const customerOrder = order.toCustomerJSON();
+  assert.equal(Object.hasOwn(customerOrder, 'supplierReconcileNextCheckAt'), false);
+  assert.equal(Object.hasOwn(customerOrder, 'supplierReconcileLeaseToken'), false);
+  assert.equal(Object.hasOwn(customerOrder, 'supplierReconcileLeaseUntil'), false);
+});
 test('PurchaseOperation key has one globally unique index and expiresAt is not a TTL index', () => {
   assert.deepEqual(indexesFor(PurchaseOperation.schema, 'key'), [[
     { key: 1 },

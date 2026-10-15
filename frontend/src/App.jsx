@@ -1,33 +1,37 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import PublicLayout from './components/PublicLayout/PublicLayout.jsx';
 import AdminLayout from './components/AdminLayout/AdminLayout.jsx';
 import ProtectedRoute from './components/ProtectedRoute/ProtectedRoute.jsx';
-import Home from './pages/Home/Home.jsx';
-import BuyData from './pages/BuyData/BuyData.jsx';
-import Checkout from './pages/Checkout/Checkout.jsx';
-import OrderSuccess from './pages/OrderSuccess/OrderSuccess.jsx';
-import TrackOrder from './pages/TrackOrder/TrackOrder.jsx';
-import Login from './pages/Login/Login.jsx';
-import Register from './pages/Register/Register.jsx';
-import ForgotPassword from './pages/ForgotPassword/ForgotPassword.jsx';
-import ResetPassword from './pages/ResetPassword/ResetPassword.jsx';
-import MyOrders from './pages/MyOrders/MyOrders.jsx';
-import OrderDetails from './pages/OrderDetails/OrderDetails.jsx';
-import Wallet from './pages/Wallet/Wallet.jsx';
-import Profile from './pages/Profile/Profile.jsx';
-import AdminDashboard from './pages/AdminDashboard/AdminDashboard.jsx';
-import AdminOrders from './pages/AdminOrders/AdminOrders.jsx';
-import AdminCustomers from './pages/AdminCustomers/AdminCustomers.jsx';
-import AdminPackages from './pages/AdminPackages/AdminPackages.jsx';
-import AdminPricing from './pages/AdminPricing/AdminPricing.jsx';
-import AdminTransactions from './pages/AdminTransactions/AdminTransactions.jsx';
-import AdminProfit from './pages/AdminProfit/AdminProfit.jsx';
-import AdminRegister from './pages/AdminRegister/AdminRegister.jsx';
-import AdminNotifications from './pages/AdminNotifications/AdminNotifications.jsx';
-import AdminSuppliers from './pages/AdminSuppliers/AdminSuppliers.jsx';
-import NotFound from './pages/NotFound/NotFound.jsx';
+import Loader from './components/Loader/Loader.jsx';
+import RouteErrorBoundary from './components/RouteErrorBoundary/RouteErrorBoundary.jsx';
 import { useBackendConnection } from './context/BackendConnectionContext.jsx';
 import './App.css';
+
+const Home = lazy(() => import('./pages/Home/Home.jsx'));
+const BuyData = lazy(() => import('./pages/BuyData/BuyData.jsx'));
+const Checkout = lazy(() => import('./pages/Checkout/Checkout.jsx'));
+const OrderSuccess = lazy(() => import('./pages/OrderSuccess/OrderSuccess.jsx'));
+const TrackOrder = lazy(() => import('./pages/TrackOrder/TrackOrder.jsx'));
+const Login = lazy(() => import('./pages/Login/Login.jsx'));
+const Register = lazy(() => import('./pages/Register/Register.jsx'));
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword/ForgotPassword.jsx'));
+const ResetPassword = lazy(() => import('./pages/ResetPassword/ResetPassword.jsx'));
+const MyOrders = lazy(() => import('./pages/MyOrders/MyOrders.jsx'));
+const OrderDetails = lazy(() => import('./pages/OrderDetails/OrderDetails.jsx'));
+const Wallet = lazy(() => import('./pages/Wallet/Wallet.jsx'));
+const Profile = lazy(() => import('./pages/Profile/Profile.jsx'));
+const AdminDashboard = lazy(() => import('./pages/AdminDashboard/AdminDashboard.jsx'));
+const AdminOrders = lazy(() => import('./pages/AdminOrders/AdminOrders.jsx'));
+const AdminCustomers = lazy(() => import('./pages/AdminCustomers/AdminCustomers.jsx'));
+const AdminPackages = lazy(() => import('./pages/AdminPackages/AdminPackages.jsx'));
+const AdminPricing = lazy(() => import('./pages/AdminPricing/AdminPricing.jsx'));
+const AdminTransactions = lazy(() => import('./pages/AdminTransactions/AdminTransactions.jsx'));
+const AdminProfit = lazy(() => import('./pages/AdminProfit/AdminProfit.jsx'));
+const AdminRegister = lazy(() => import('./pages/AdminRegister/AdminRegister.jsx'));
+const AdminNotifications = lazy(() => import('./pages/AdminNotifications/AdminNotifications.jsx'));
+const AdminSuppliers = lazy(() => import('./pages/AdminSuppliers/AdminSuppliers.jsx'));
+const NotFound = lazy(() => import('./pages/NotFound/NotFound.jsx'));
 
 function App() {
   const connection = useBackendConnection();
@@ -50,48 +54,52 @@ function App() {
           </button>
         </div>
       )}
-      <Routes>
-        <Route element={<PublicLayout />}>
-          {/* Open to everyone, no account needed */}
-          <Route path="/" element={<Home />} />
-          <Route path="/buy" element={<BuyData />} />
-          <Route path="/checkout" element={<Checkout />} />
-          <Route path="/order-success" element={<OrderSuccess />} />
-          <Route path="/track" element={<TrackOrder />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/reset-password/:token?" element={<ResetPassword />} />
-          <Route path="/reset-password" element={<ResetPassword />} />
+      <RouteErrorBoundary>
+        <Suspense fallback={<Loader fullPage label="Loading page..." />}>
+          <Routes>
+            <Route element={<PublicLayout />}>
+              {/* Open to everyone, no account needed */}
+              <Route path="/" element={<Home />} />
+              <Route path="/buy" element={<BuyData />} />
+              <Route path="/checkout" element={<Checkout />} />
+              <Route path="/order-success" element={<OrderSuccess />} />
+              <Route path="/track" element={<TrackOrder />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/register" element={<Register />} />
+              <Route path="/forgot-password" element={<ForgotPassword />} />
+              <Route path="/reset-password/:token?" element={<ResetPassword />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
 
-          {/* Optional customer account */}
-          <Route element={<ProtectedRoute />}>
-            <Route path="/orders" element={<MyOrders />} />
-            <Route path="/orders/:id" element={<OrderDetails />} />
-            <Route path="/wallet" element={<Wallet />} />
-            <Route path="/profile" element={<Profile />} />
-          </Route>
+              {/* Optional customer account */}
+              <Route element={<ProtectedRoute />}>
+                <Route path="/orders" element={<MyOrders />} />
+                <Route path="/orders/:id" element={<OrderDetails />} />
+                <Route path="/wallet" element={<Wallet />} />
+                <Route path="/profile" element={<Profile />} />
+              </Route>
 
-          <Route path="*" element={<NotFound />} />
-        </Route>
+              <Route path="*" element={<NotFound />} />
+            </Route>
 
-        {/* Admin only (also enforced by the backend on every request) */}
-        <Route element={<ProtectedRoute adminOnly />}>
-          <Route path="/admin" element={<AdminLayout />}>
-            <Route index element={<AdminDashboard />} />
-            <Route path="orders" element={<AdminOrders />} />
-            <Route path="customers" element={<AdminCustomers />} />
-            <Route path="packages" element={<AdminPackages />} />
-            <Route path="pricing" element={<AdminPricing />} />
-            <Route path="transactions" element={<AdminTransactions />} />
-            <Route path="notifications" element={<AdminNotifications />} />
-            <Route path="suppliers" element={<AdminSuppliers />} />
-            <Route path="register" element={<AdminRegister />} />
-            <Route path="profit" element={<AdminProfit />} />
-            <Route path="*" element={<NotFound />} />
-          </Route>
-        </Route>
-      </Routes>
+            {/* Admin only (also enforced by the backend on every request) */}
+            <Route element={<ProtectedRoute adminOnly />}>
+              <Route path="/admin" element={<AdminLayout />}>
+                <Route index element={<AdminDashboard />} />
+                <Route path="orders" element={<AdminOrders />} />
+                <Route path="customers" element={<AdminCustomers />} />
+                <Route path="packages" element={<AdminPackages />} />
+                <Route path="pricing" element={<AdminPricing />} />
+                <Route path="transactions" element={<AdminTransactions />} />
+                <Route path="notifications" element={<AdminNotifications />} />
+                <Route path="suppliers" element={<AdminSuppliers />} />
+                <Route path="register" element={<AdminRegister />} />
+                <Route path="profit" element={<AdminProfit />} />
+                <Route path="*" element={<NotFound />} />
+              </Route>
+            </Route>
+          </Routes>
+        </Suspense>
+      </RouteErrorBoundary>
     </div>
   );
 }

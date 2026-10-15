@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import useAsync from '../../hooks/useAsync.js';
-import { getOrderDetails, getOrders, checkOrderSupplierStatus } from '../../services/adminService.js';
-import { ALL_STATUSES, STATUS_META } from '../../utils/orderStatus.js';
+import { getOrderDetails, getOrders, getStaleSupplierOrders, checkOrderSupplierStatus } from '../../services/adminService.js';
 import { NETWORKS, buyerLabel, humanize } from '../../utils/adminFormat.js';
 import { formatCurrency } from '../../utils/formatCurrency.js';
 import { formatDate } from '../../utils/formatDate.js';
@@ -233,6 +232,8 @@ export default function AdminOrders() {
   const [searchInput, setSearchInput] = useState(initialSearch);
   const [search, setSearch] = useState(initialSearch);
   const [selectedId, setSelectedId] = useState(searchParams.get('open'));
+  const [stalePage, setStalePage] = useState(1);
+  const [showStaleOrders, setShowStaleOrders] = useState(false);
 
   const { data, loading, error, reload } = useAsync(
     () =>
@@ -245,6 +246,10 @@ export default function AdminOrders() {
         needsReview: reviewOnly ? 'true' : undefined,
       }),
     [page, status, network, search, reviewOnly]
+  );
+  const staleOrders = useAsync(
+    () => getStaleSupplierOrders({ page: stalePage, limit: 10 }),
+    [stalePage]
   );
 
   const selected = data?.orders.find((order) => order._id === selectedId);
@@ -259,8 +264,70 @@ export default function AdminOrders() {
     setPage(1);
   };
 
+  const staleSummary = staleOrders.data?.summary;
+  const staleCount = staleSummary?.total || 0;
+  const oldestAgeHours = staleSummary?.oldestAgeMs == null
+    ? null
+    : Math.floor(staleSummary.oldestAgeMs / (60 * 60 * 1000));
+
   return (
     <div>
+      {staleOrders.error && <Alert onRetry={staleOrders.reload}>{staleOrders.error}</Alert>}
+      {staleCount > 0 && (
+        <Alert type="warning" title={`${staleCount} submitted supplier order(s) are outside automatic status checks`}>
+          These orders remain processing and require review. They are not automatically failed or refunded.
+          {oldestAgeHours != null && <span> Oldest is about {oldestAgeHours} hour(s) old.</span>}{' '}
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            aria-expanded={showStaleOrders}
+            aria-controls="stale-supplier-orders"
+            onClick={() => setShowStaleOrders((shown) => !shown)}
+          >
+            {showStaleOrders ? 'Hide review list' : 'View review list'}
+          </button>
+        </Alert>
+      )}
+      {showStaleOrders && (
+        <section id="stale-supplier-orders" className="admin-orders__stale" aria-labelledby="stale-supplier-title">
+          <div className="admin-orders__stale-heading">
+            <h2 id="stale-supplier-title">Outside automatic reconciliation window</h2>
+            <p className="muted">Status checks stopped after 24 hours. Verify with the supplier before taking action.</p>
+          </div>
+          {staleOrders.loading && !staleOrders.data && <Loader label="Loading stale supplier orders..." />}
+          {staleOrders.data?.orders?.length > 0 ? (
+            <>
+              <div className="order-detail__scroll">
+                <table className="order-detail__table">
+                  <thead>
+                    <tr><th>Order</th><th>Bundle</th><th>Order status</th><th>Supplier status</th><th>Created</th><th>Review</th></tr>
+                  </thead>
+                  <tbody>
+                    {staleOrders.data.orders.map((order) => (
+                      <tr key={order._id}>
+                        <td><button type="button" className="btn btn--ghost btn--sm" onClick={() => setSelectedId(order._id)}>{order.orderId}</button></td>
+                        <td>{order.network} {order.dataAmount}</td>
+                        <td><OrderStatus status={order.status} /></td>
+                        <td>{humanize(order.supplierStatus)}</td>
+                        <td>{formatDate(order.createdAt)}</td>
+                        <td><span className="status-badge status-badge--warning">Review required</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <Pagination
+                page={stalePage}
+                pages={staleOrders.data.pagination?.pages}
+                onChange={setStalePage}
+              />
+            </>
+          ) : staleOrders.data ? (
+            <p className="muted">No orders currently match this diagnostic.</p>
+          ) : null}
+        </section>
+      )}
+
       <form className="filters" onSubmit={handleSearch} role="search">
         <div className="field filters__grow">
           <label className="field__label" htmlFor="orderSearch">

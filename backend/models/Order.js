@@ -74,6 +74,9 @@ const orderSchema = new mongoose.Schema(
     supplierSubmitted: { type: Boolean, default: false },
     supplierSubmittedAt: { type: Date },
     supplierCompletedAt: { type: Date },
+    supplierReconcileNextCheckAt: { type: Date },
+    supplierReconcileLeaseToken: { type: String },
+    supplierReconcileLeaseUntil: { type: Date },
     supplierRefunded: { type: Boolean, default: false },
     paymentMethod: { type: String, enum: ['direct', 'wallet'], default: 'direct' },
     feePassedToCustomer: { type: Boolean },
@@ -99,6 +102,10 @@ const orderSchema = new mongoose.Schema(
 );
 
 orderSchema.index({ customer: 1, createdAt: -1 });
+orderSchema.index(
+  { supplier: 1, supplierSubmitted: 1, status: 1, supplierStatus: 1, supplierReconcileNextCheckAt: 1, createdAt: 1 },
+  { partialFilterExpression: { supplier: 'PadodaTagh', supplierSubmitted: true, status: 'processing' } }
+);
 orderSchema.index(
   { purchaseOperation: 1 },
   { unique: true, partialFilterExpression: { purchaseOperation: { $type: 'objectId' } } }
@@ -169,6 +176,9 @@ orderSchema.methods.toCustomerJSON = function () {
   delete order.supplierSubmitted;
   delete order.supplierSubmittedAt;
   delete order.supplierCompletedAt;
+  delete order.supplierReconcileNextCheckAt;
+  delete order.supplierReconcileLeaseToken;
+  delete order.supplierReconcileLeaseUntil;
   delete order.supplierRefunded;
   delete order.volumeInMB;
   delete order.profit;
