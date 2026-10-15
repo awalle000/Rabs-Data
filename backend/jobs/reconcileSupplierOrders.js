@@ -9,6 +9,7 @@ const RUN_EVERY_MS = 60 * 1000;
 const FIRST_CHECK_AFTER_MS = 10 * 1000;
 const BATCH_SIZE = 15;
 const LEASE_MS = Math.max(5 * 60 * 1000, env.padodatagh.requestTimeoutMs * 5 + 60 * 1000);
+let schedulerState = 'not_started';
 
 export const createSupplierReconciliationRunner = ({
   orderModel = Order,
@@ -23,6 +24,8 @@ export const createSupplierReconciliationRunner = ({
   logger = console,
 } = {}) => {
   let running = false;
+  let stopped = false;
+  let activeRun = null;
 
   const claimNextOrder = async (timestamp) => {
     const currentTime = new Date(timestamp);
@@ -61,12 +64,13 @@ export const createSupplierReconciliationRunner = ({
     );
   };
 
-  return async () => {
-    if (running || !isConfigured('PadodaTagh')) return;
+  const run = async () => {
+    if (stopped || running || !isConfigured('PadodaTagh')) return;
     running = true;
 
-    try {
+    activeRun = (async () => {
       for (let claimed = 0; claimed < batchSize; claimed += 1) {
+        if (stopped) break;
         const order = await claimNextOrder(now());
         if (!order) break;
 
@@ -82,18 +86,63 @@ export const createSupplierReconciliationRunner = ({
           ).catch((error) => logger.error(`[reconcileSupplier] Could not release order claim ${order.orderId}:`, error.message));
         }
       }
+    })();
+
+    try {
+      await activeRun;
     } catch (error) {
       logger.error('[reconcileSupplier] Run error:', error.message);
     } finally {
+      activeRun = null;
       running = false;
     }
   };
+
+  run.stop = async () => {
+    stopped = true;
+    if (activeRun) await activeRun.catch(() => {});
+  };
+  run.isStopped = () => stopped;
+  return run;
 };
 
 export const reconcilePendingSupplierOrders = createSupplierReconciliationRunner();
 
-export const startSupplierReconciliation = () => {
-  const timer = setInterval(reconcilePendingSupplierOrders, RUN_EVERY_MS);
+export const startSupplierReconciliation = ({
+  enabled = env.supplierReconciliationEnabled,
+  logger = console,
+  runner = reconcilePendingSupplierOrders,
+  setIntervalFn = setInterval,
+  clearIntervalFn = clearInterval,
+} = {}) => {
+  if (!enabled) {
+    schedulerState = 'paused';
+    logger.warn('[reconcileSupplier] scheduler paused; set SUPPLIER_RECONCILIATION_ENABLED=true to enable periodic status checks');
+    return { enabled: false, stop: async () => {}, run: async () => {} };
+  }
+
+  let stopping = false;
+  schedulerState = 'enabled';
+  const run = async () => {
+    if (!stopping) await runner();
+  };
+  const timer = setIntervalFn(() => { void run(); }, RUN_EVERY_MS);
   timer.unref();
-  return timer;
+  logger.info('[reconcileSupplier] scheduler enabled; polling every 60000ms');
+
+  return {
+    enabled: true,
+    run,
+    async stop() {
+      if (stopping) return;
+      stopping = true;
+      schedulerState = 'stopping';
+      clearIntervalFn(timer);
+      await runner.stop?.();
+      schedulerState = 'stopped';
+      logger.info('[reconcileSupplier] scheduler stopped');
+    },
+  };
 };
+
+export const getSupplierReconciliationRuntimeState = () => schedulerState;

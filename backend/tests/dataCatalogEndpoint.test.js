@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 
 process.env.ENABLED_NETWORKS = 'MTN,Telecel,AirtelTigo';
 
-const [{ default: DataPackage }, { getCatalog, getNetworks, getPackages }] = await Promise.all([
+const [{ default: DataPackage }, { default: CatalogSyncState }, { getCatalog, getNetworks, getPackages }] = await Promise.all([
   import('../models/DataPackage.js'),
+  import('../models/CatalogSyncState.js'),
   import('../controllers/dataController.js'),
 ]);
 
@@ -48,7 +49,7 @@ const callController = async (controller, req) => {
 };
 
 test('customer catalog endpoint only returns eligible PadodaTagh offers and matching network counts', async () => {
-  const originals = { find: DataPackage.find };
+  const originals = { find: DataPackage.find, catalogFindOne: CatalogSyncState.findOne };
   const eligible = [
     makePackage('MTN'),
     makePackage('Telecel'),
@@ -73,6 +74,7 @@ test('customer catalog endpoint only returns eligible PadodaTagh offers and matc
   });
   const records = [...eligible, remadataLegacy, ambiguous, unverified, stale];
   const queries = [];
+  CatalogSyncState.findOne = () => ({ lean: async () => null });
   DataPackage.find = (filter) => {
     queries.push(filter);
     const chain = {
@@ -112,5 +114,113 @@ test('customer catalog endpoint only returns eligible PadodaTagh offers and matc
     assert.deepEqual(catalog.packages.map((item) => item._id), eligible.map((item) => item._id));
   } finally {
     DataPackage.find = originals.find;
+    CatalogSyncState.findOne = originals.catalogFindOne;
+  }
+});
+
+test('public catalog endpoints fail closed during a partial refresh or after an unsuccessful refresh', async () => {
+  const originals = { find: DataPackage.find, catalogFindOne: CatalogSyncState.findOne };
+  let state = {
+    status: 'syncing',
+    lastStartedAt: new Date(),
+    lastSuccessfulAt: new Date(Date.now() - 60_000),
+  };
+  let packageQueries = 0;
+  DataPackage.find = () => {
+    packageQueries += 1;
+    throw new Error('package reads must not occur while publication is partial');
+  };
+  CatalogSyncState.findOne = () => ({ lean: async () => state });
+
+  try {
+    for (const controller of [getCatalog, getNetworks, getPackages]) {
+      await assert.rejects(
+        callController(controller, { query: {} }),
+        (error) => error.code === 'CATALOG_REFRESH_IN_PROGRESS' && error.statusCode === 503
+      );
+    }
+
+    state = {
+      status: 'error',
+      lastStartedAt: new Date(),
+      lastSuccessfulAt: new Date(Date.now() - 60_000),
+    };
+    await assert.rejects(
+      callController(getCatalog, { query: {} }),
+      (error) => error.code === 'CATALOG_REFRESH_IN_PROGRESS' && error.statusCode === 503
+    );
+    assert.equal(packageQueries, 0);
+  } finally {
+    DataPackage.find = originals.find;
+    CatalogSyncState.findOne = originals.catalogFindOne;
+  }
+});
+
+test('catalog response is discarded if a refresh starts and completes during the package read', async () => {
+  const originals = { find: DataPackage.find, catalogFindOne: CatalogSyncState.findOne };
+  const previousSuccess = new Date(Date.now() - 120_000);
+  const refreshStart = new Date(Date.now() - 10_000);
+  let stateRead = 0;
+  let packageReads = 0;
+  CatalogSyncState.findOne = () => ({
+    lean: async () => {
+      stateRead += 1;
+      return stateRead === 1
+        ? { status: 'idle', lastStartedAt: previousSuccess, lastFinishedAt: previousSuccess, lastSuccessfulAt: previousSuccess, lockToken: null }
+        : { status: 'idle', lastStartedAt: refreshStart, lastFinishedAt: new Date(), lastSuccessfulAt: new Date(), lockToken: null };
+    },
+  });
+  DataPackage.find = () => {
+    packageReads += 1;
+    const chain = { select() { return chain; }, sort() { return chain; }, lean: async () => [] };
+    return chain;
+  };
+
+  try {
+    await assert.rejects(
+      callController(getCatalog, { query: {} }),
+      (error) => error.code === 'CATALOG_REFRESH_IN_PROGRESS' && error.statusCode === 503
+    );
+    assert.equal(packageReads, 1);
+    assert.equal(stateRead, 2);
+  } finally {
+    DataPackage.find = originals.find;
+    CatalogSyncState.findOne = originals.catalogFindOne;
+  }
+});
+
+test('catalog reads recover after a later successful refresh', async () => {
+  const originals = { find: DataPackage.find, catalogFindOne: CatalogSyncState.findOne };
+  const failureStarted = new Date(Date.now() - 5_000);
+  const recoveredAt = new Date();
+  let stateRead = 0;
+  let packageRead = 0;
+  CatalogSyncState.findOne = () => ({
+    lean: async () => {
+      stateRead += 1;
+      if (stateRead === 1) {
+        return { status: 'error', lastStartedAt: failureStarted, lastSuccessfulAt: new Date(failureStarted.getTime() - 60_000) };
+      }
+      return { status: 'idle', lastStartedAt: recoveredAt, lastFinishedAt: recoveredAt, lastSuccessfulAt: recoveredAt, lockToken: null };
+    },
+  });
+  DataPackage.find = () => {
+    packageRead += 1;
+    const chain = { select() { return chain; }, sort() { return chain; }, lean: async () => [] };
+    return chain;
+  };
+
+  try {
+    await assert.rejects(
+      callController(getCatalog, { query: {} }),
+      (error) => error.code === 'CATALOG_REFRESH_IN_PROGRESS'
+    );
+    const recovered = await callController(getCatalog, { query: {} });
+    assert.equal(recovered.success, true);
+    assert.equal(recovered.count, 0);
+    assert.equal(packageRead, 1);
+  } finally {
+    DataPackage.find = originals.find;
+    CatalogSyncState.findOne = originals.catalogFindOne;
   }
 });

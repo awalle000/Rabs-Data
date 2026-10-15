@@ -33,10 +33,14 @@ const paymentSchema = new mongoose.Schema(
     lastCheckedAt: { type: Date },
     verifiedAt: { type: Date },
     paidAt: { type: Date },
+    orderRecoveryState: { type: String, enum: ['pending', 'processing', 'complete', 'review'], default: undefined },
+    orderRecoveryNextAt: { type: Date },
+    orderRecoveryLeaseToken: { type: String },
+    orderRecoveryLeaseUntil: { type: Date },
+    orderRecoveryAttempts: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
 
 paymentSchema.index({ user: 1, walletFundingActive: 1 }, { unique: true, partialFilterExpression: { walletFundingActive: true } });
-
 export default mongoose.model('Payment', paymentSchema);

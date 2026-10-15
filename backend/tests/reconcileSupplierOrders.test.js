@@ -2,8 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import Order from '../models/Order.js';
-import { createSupplierReconciliationRunner } from '../jobs/reconcileSupplierOrders.js';
+import {
+  createSupplierReconciliationRunner,
+  getSupplierReconciliationRuntimeState,
+  startSupplierReconciliation,
+} from '../jobs/reconcileSupplierOrders.js';
 import { applyProviderResult } from '../services/orderFulfillmentService.js';
+import { isSupplierReconciliationEnabled } from '../utils/supplierReconciliationPolicy.js';
 
 const BASE_TIME = Date.UTC(2026, 9, 14, 12);
 const QUIET_LOGGER = { error() {} };
@@ -210,6 +215,7 @@ test('stale delivered reconciliation results cannot overwrite a newer order vers
     );
     assert.equal(attemptedFilter.updatedAt, staleVersion);
     assert.equal(attemptedFilter.supplierReconcileLeaseToken, 'old-lease');
+    assert.ok(attemptedFilter.supplierReconcileLeaseUntil.$gt instanceof Date);
     assert.equal(result.status, 'failed');
   } finally {
     Order.findOneAndUpdate = originals.findOneAndUpdate;
@@ -254,4 +260,83 @@ test('processing submitted orders outside pending or uncertain remain ineligible
 
   assert.equal(checked, 0);
   assert.equal(orders[0].supplierReconcileNextCheckAt, undefined);
+});
+
+test('paused scheduler keeps the API-facing process available and creates no timer or claims', async () => {
+  let intervalCalls = 0;
+  let runnerCalls = 0;
+  const warnings = [];
+  const controller = startSupplierReconciliation({
+    enabled: false,
+    logger: { warn: (message) => warnings.push(message), info() {} },
+    runner: async () => { runnerCalls += 1; },
+    setIntervalFn: () => { intervalCalls += 1; return {}; },
+  });
+
+  await controller.run();
+  await controller.stop();
+
+  assert.equal(controller.enabled, false);
+  assert.equal(getSupplierReconciliationRuntimeState(), 'paused');
+  assert.equal(intervalCalls, 0);
+  assert.equal(runnerCalls, 0);
+  assert.match(warnings[0], /SUPPLIER_RECONCILIATION_ENABLED=true/);
+});
+
+test('scheduler stop clears its timer and prevents later scheduled runs', async () => {
+  let callback;
+  let timerCleared = false;
+  let runnerCalls = 0;
+  const controller = startSupplierReconciliation({
+    enabled: true,
+    logger: { info() {}, warn() {} },
+    runner: async () => { runnerCalls += 1; },
+    setIntervalFn: (fn) => {
+      callback = fn;
+      return { id: 'timer-id', unref() {} };
+    },
+    clearIntervalFn: (timer) => { timerCleared = timer.id === 'timer-id'; },
+  });
+
+  await controller.stop();
+  await callback();
+
+  assert.equal(controller.enabled, true);
+  assert.equal(getSupplierReconciliationRuntimeState(), 'stopped');
+  assert.equal(timerCleared, true);
+  assert.equal(runnerCalls, 0);
+});
+
+test('runner stop waits for active status checks and blocks additional claims', async () => {
+  const { orderModel } = makeStore(3);
+  let releaseCheck;
+  let checks = 0;
+  const checkGate = new Promise((resolve) => { releaseCheck = resolve; });
+  const runner = makeRunner({
+    orderModel,
+    reconcile: async () => {
+      checks += 1;
+      await checkGate;
+    },
+    batchSize: 3,
+  });
+
+  const activePass = runner();
+  while (checks === 0) await new Promise((resolve) => setImmediate(resolve));
+  let stopped = false;
+  const stopping = runner.stop().then(() => { stopped = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(stopped, false);
+  releaseCheck();
+  await Promise.all([activePass, stopping]);
+
+  assert.equal(stopped, true);
+  assert.equal(checks, 1);
+});
+
+test('scheduler is opt-in by default and only exact true enables it', () => {
+  assert.equal(isSupplierReconciliationEnabled(undefined), false);
+  assert.equal(isSupplierReconciliationEnabled('false'), false);
+  assert.equal(isSupplierReconciliationEnabled('TRUE'), false);
+  assert.equal(isSupplierReconciliationEnabled('true'), true);
 });

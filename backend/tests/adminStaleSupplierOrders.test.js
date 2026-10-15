@@ -68,7 +68,7 @@ test('stale supplier diagnostic reports bounded PII-free results and does not mu
   Order.updateOne = async () => { updateCalls += 1; };
 
   try {
-    const result = await invoke({ page: '2', limit: '1000' });
+    const result = await invoke({ page: '999999999', limit: '1000' });
     const match = aggregation[0].$match;
 
     assert.equal(result.summary.total, 31);

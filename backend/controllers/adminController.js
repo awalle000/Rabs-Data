@@ -173,7 +173,7 @@ export const getOrders = asyncHandler(async (req, res) => {
 export const getStaleSupplierOrders = asyncHandler(async (req, res) => {
   const now = new Date();
   const cutoffAt = new Date(now.getTime() - SUPPLIER_RECONCILIATION_GIVE_UP_AFTER_MS);
-  const { page, limit, skip } = getPagination(req.query, 10, 25);
+  const requested = getPagination(req.query, 10, 25);
   const filter = {
     supplier: 'PadodaTagh',
     supplierSubmitted: true,
@@ -182,20 +182,20 @@ export const getStaleSupplierOrders = asyncHandler(async (req, res) => {
     createdAt: { $lt: cutoffAt },
   };
 
-  const [summaryRows, orders] = await Promise.all([
-    Order.aggregate([
-      { $match: filter },
-      { $group: { _id: null, total: { $sum: 1 }, oldestCreatedAt: { $min: '$createdAt' } } },
-    ]),
-    Order.find(filter)
-      .select('_id orderId network packageName dataAmount status supplierStatus supplierErrorCode createdAt updatedAt supplierSubmittedAt needsReview')
-      .sort({ createdAt: 1, _id: 1 })
-      .skip(skip)
-      .limit(limit)
-      .lean(),
+  const summaryRows = await Order.aggregate([
+    { $match: filter },
+    { $group: { _id: null, total: { $sum: 1 }, oldestCreatedAt: { $min: '$createdAt' } } },
   ]);
 
   const summary = summaryRows[0] || { total: 0, oldestCreatedAt: null };
+  const pages = Math.ceil(summary.total / requested.limit) || 1;
+  const page = Math.min(requested.page, pages);
+  const orders = await Order.find(filter)
+    .select('_id orderId network packageName dataAmount status supplierStatus supplierErrorCode createdAt updatedAt supplierSubmittedAt needsReview')
+    .sort({ createdAt: 1, _id: 1 })
+    .skip((page - 1) * requested.limit)
+    .limit(requested.limit)
+    .lean();
   res.json({
     success: true,
     cutoffAt,
@@ -205,7 +205,7 @@ export const getStaleSupplierOrders = asyncHandler(async (req, res) => {
       oldestAgeMs: summary.oldestCreatedAt ? Math.max(0, now.getTime() - new Date(summary.oldestCreatedAt).getTime()) : null,
     },
     orders,
-    pagination: buildMeta(summary.total, page, limit),
+    pagination: buildMeta(summary.total, page, requested.limit),
   });
 });
 

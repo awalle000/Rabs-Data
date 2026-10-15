@@ -137,9 +137,23 @@ export const dispatchPendingAdminPushes = async () => {
 };
 
 export const startAdminPushDispatcher = () => {
-  const timer = setInterval(() => { void dispatchPendingAdminPushes(); }, 15_000);
+  let stopping = false;
+  let activeRun = null;
+  const tick = async () => {
+    if (stopping || activeRun) return;
+    activeRun = dispatchPendingAdminPushes();
+    try { await activeRun; } finally { activeRun = null; }
+  };
+  const timer = setInterval(() => { void tick(); }, 15_000);
   timer.unref?.();
-  void dispatchPendingAdminPushes();
+  void tick();
+  timer.stop = async () => {
+    if (stopping) return;
+    stopping = true;
+    clearInterval(timer);
+    if (activeRun) await activeRun;
+  };
+  return timer;
 };
 
 export const removeAdminPushSubscription = async (adminId, endpoint) =>

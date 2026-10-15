@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { getSupplierControl, recordSupplierEvent } from './supplierControlService.js';
 import Order from '../models/Order.js';
 import Payment from '../models/Payment.js';
@@ -190,6 +191,7 @@ export const applyProviderResult = async (order, result, {
   const expectedVersion = {
     ...(expectedUpdatedAt ? { updatedAt: expectedUpdatedAt } : {}),
     ...(expectedReconcileLeaseToken ? { supplierReconcileLeaseToken: expectedReconcileLeaseToken } : {}),
+    ...(expectedReconcileLeaseToken ? { supplierReconcileLeaseUntil: { $gt: new Date() } } : {}),
   };
   const supplierRef = result.providerReference || order.providerReference || order.supplierReference;
   const returnedCost = result.supplierCost ?? result.amount;
@@ -406,6 +408,229 @@ export const fulfillOrder = async (orderId) => {
   return submitPersistedOrder(order);
 };
 
+const recoveryRetryDelayMs = (attempts) => Math.min(60 * 60 * 1000, 30_000 * (2 ** Math.min(attempts, 7)));
+
+const updateOrderPaymentRecovery = ({ paymentId, leaseToken, update }) => Payment.updateOne(
+  {
+    _id: paymentId,
+    status: 'successful',
+    purpose: 'order',
+    orderRecoveryState: 'processing',
+    orderRecoveryLeaseToken: leaseToken,
+  },
+  update
+);
+
+const claimOrderPaymentRecovery = async ({ paymentId, now = new Date() }) => {
+  const leaseToken = randomUUID();
+  return Payment.findOneAndUpdate(
+    {
+      _id: paymentId,
+      status: 'successful',
+      purpose: 'order',
+      orderRecoveryState: { $in: ['pending', 'processing'] },
+      orderRecoveryNextAt: { $lte: now },
+      $or: [
+        { orderRecoveryLeaseUntil: { $exists: false } },
+        { orderRecoveryLeaseUntil: null },
+        { orderRecoveryLeaseUntil: { $lte: now } },
+      ],
+    },
+    {
+      $set: {
+        orderRecoveryState: 'processing',
+        orderRecoveryLeaseToken: leaseToken,
+        orderRecoveryLeaseUntil: new Date(now.getTime() + 5 * 60 * 1000),
+      },
+      $inc: { orderRecoveryAttempts: 1 },
+    },
+    { returnDocument: 'after' }
+  );
+};
+
+export const recoverConfirmedOrderPayment = async (paymentId, { allowLegacy = true } = {}) => {
+  const now = new Date();
+  const payment = await claimOrderPaymentRecovery({ paymentId, now });
+  if (!payment) return { action: 'not_claimed' };
+  const leaseToken = payment.orderRecoveryLeaseToken;
+
+  try {
+    const order = await Order.findById(payment.order);
+    if (!order || order.paymentReference !== payment.reference || String(order.customer || '') !== String(payment.user || '')) {
+      await updateOrderPaymentRecovery({
+        paymentId,
+        leaseToken,
+        update: { $set: { orderRecoveryState: 'review' }, $unset: { orderRecoveryLeaseToken: 1, orderRecoveryLeaseUntil: 1 } },
+      });
+      await notifyAdminsSafely(paymentReviewNotification(payment, 'confirmed_payment_order_mismatch'));
+      return { action: 'review', reason: 'confirmed_payment_order_mismatch' };
+    }
+
+    if (order.status === 'failed' || order.status === 'refunded') {
+      await updateOrderPaymentRecovery({
+        paymentId,
+        leaseToken,
+        update: { $set: { orderRecoveryState: 'review' }, $unset: { orderRecoveryLeaseToken: 1, orderRecoveryLeaseUntil: 1 } },
+      });
+      await Transaction.updateOne(
+        { operationKey: `payment-order-review:${payment._id}` },
+        { $setOnInsert: {
+          operationKey: `payment-order-review:${payment._id}`,
+          user: payment.user,
+          order: payment.order,
+          payment: payment._id,
+          type: 'payment_issue',
+          direction: 'info',
+          amount: payment.amount,
+          reference: payment.reference,
+          description: 'Provider-confirmed payment requires review because its order is terminal.',
+        } },
+        { upsert: true }
+      );
+      await notifyAdminsSafely(paymentReviewNotification(payment, 'confirmed_payment_terminal_order'));
+      return { action: 'review', reason: 'confirmed_payment_terminal_order' };
+    }
+
+    if (order.status === 'successful' || order.supplierSubmitted === true) {
+      await updateOrderPaymentRecovery({
+        paymentId,
+        leaseToken,
+        update: { $set: { orderRecoveryState: 'complete' }, $unset: { orderRecoveryLeaseToken: 1, orderRecoveryLeaseUntil: 1 } },
+      });
+      return { action: 'complete', orderStatus: order.status, supplierSubmitted: order.supplierSubmitted === true };
+    }
+
+    let paidOrder = order;
+    if (['pending', 'payment_pending'].includes(order.status)) {
+      paidOrder = await markOrderPaid(order._id, payment.reference, {
+        paymentProvider: payment.provider,
+        paymentGatewayFee: payment.paymentGatewayFee || 0,
+        paymentGatewayFeeKnown: payment.paymentGatewayFeeKnown === true || payment.provider === 'hubtel',
+        ...(payment.provider === 'hubtel' ? { hubtelTransactionId: payment.hubtelTransactionId } : {}),
+      });
+    }
+
+    if (!paidOrder || paidOrder.status !== 'paid') {
+      const latestOrder = await Order.findById(payment.order);
+      if (latestOrder && (['successful', 'failed', 'refunded'].includes(latestOrder.status) || latestOrder.supplierSubmitted === true)) {
+        await updateOrderPaymentRecovery({
+          paymentId,
+          leaseToken,
+          update: { $set: { orderRecoveryState: 'complete' }, $unset: { orderRecoveryLeaseToken: 1, orderRecoveryLeaseUntil: 1 } },
+        });
+        return { action: 'complete', orderStatus: latestOrder.status };
+      }
+      await updateOrderPaymentRecovery({
+        paymentId,
+        leaseToken,
+        update: {
+          $set: { orderRecoveryState: 'pending', orderRecoveryNextAt: new Date(Date.now() + recoveryRetryDelayMs(payment.orderRecoveryAttempts || 1)) },
+          $unset: { orderRecoveryLeaseToken: 1, orderRecoveryLeaseUntil: 1 },
+        },
+      });
+      return { action: 'retry', reason: 'order_not_ready_for_fulfillment' };
+    }
+
+    await queuePaymentConfirmedSms(payment, paidOrder);
+    await recordOrderPaymentLedger(payment, paidOrder);
+    const fulfilled = await fulfillOrder(paidOrder._id);
+    const latestOrder = await Order.findById(payment.order);
+    if (latestOrder && ['successful', 'failed', 'refunded'].includes(latestOrder.status)) {
+      await updateOrderPaymentRecovery({
+        paymentId,
+        leaseToken,
+        update: { $set: { orderRecoveryState: 'complete' }, $unset: { orderRecoveryLeaseToken: 1, orderRecoveryLeaseUntil: 1 } },
+      });
+      return { action: 'complete', orderStatus: latestOrder.status, fulfilled: Boolean(fulfilled) };
+    }
+
+    if (latestOrder?.supplierSubmitted === true) {
+      if (latestOrder.supplierStatus === 'not_submitted') {
+        await updateOrderPaymentRecovery({
+          paymentId,
+          leaseToken,
+          update: {
+            $set: { orderRecoveryState: 'pending', orderRecoveryNextAt: new Date(Date.now() + recoveryRetryDelayMs(payment.orderRecoveryAttempts || 1)) },
+            $unset: { orderRecoveryLeaseToken: 1, orderRecoveryLeaseUntil: 1 },
+          },
+        });
+        return { action: 'retry', reason: 'supplier_purchase_confirmed_not_sent' };
+      }
+      await updateOrderPaymentRecovery({
+        paymentId,
+        leaseToken,
+        update: { $set: { orderRecoveryState: 'complete' }, $unset: { orderRecoveryLeaseToken: 1, orderRecoveryLeaseUntil: 1 } },
+      });
+      return { action: 'complete', orderStatus: latestOrder.status, supplierStatus: latestOrder.supplierStatus };
+    }
+
+    await updateOrderPaymentRecovery({
+      paymentId,
+      leaseToken,
+      update: {
+        $set: { orderRecoveryState: 'pending', orderRecoveryNextAt: new Date(Date.now() + recoveryRetryDelayMs(payment.orderRecoveryAttempts || 1)) },
+        $unset: { orderRecoveryLeaseToken: 1, orderRecoveryLeaseUntil: 1 },
+      },
+    });
+    return { action: 'retry', reason: 'fulfillment_not_submitted' };
+  } catch (error) {
+    await updateOrderPaymentRecovery({
+      paymentId,
+      leaseToken,
+      update: {
+        $set: { orderRecoveryState: 'pending', orderRecoveryNextAt: new Date(Date.now() + recoveryRetryDelayMs(payment.orderRecoveryAttempts || 1)) },
+        $unset: { orderRecoveryLeaseToken: 1, orderRecoveryLeaseUntil: 1 },
+      },
+    }).catch(() => {});
+    throw error;
+  }
+};
+
+export const runConfirmedOrderPaymentRecovery = async ({
+  limit = 20,
+  shouldStop = () => false,
+  paymentModel = Payment,
+  recover = recoverConfirmedOrderPayment,
+  now = () => new Date(),
+  allowLegacy = true,
+} = {}) => {
+  const dueAt = now();
+  const batchLimit = Math.min(50, Math.max(1, Number.isInteger(limit) ? limit : 20));
+  if (allowLegacy) {
+    const legacyConfirmed = await paymentModel.find({
+      status: 'successful',
+      purpose: 'order',
+      orderRecoveryState: { $exists: false },
+    }).limit(batchLimit).select('_id').lean();
+
+    for (const payment of legacyConfirmed) {
+      if (shouldStop()) break;
+      await paymentModel.updateOne(
+        { _id: payment._id, status: 'successful', purpose: 'order', orderRecoveryState: { $exists: false } },
+        { $set: { orderRecoveryState: 'pending', orderRecoveryNextAt: dueAt, orderRecoveryAttempts: 0 } }
+      );
+    }
+  }
+
+  const due = await paymentModel.find({
+    status: 'successful',
+    purpose: 'order',
+    orderRecoveryNextAt: { $lte: dueAt },
+    $or: [
+      { orderRecoveryState: 'pending' },
+      { orderRecoveryState: 'processing', orderRecoveryLeaseUntil: { $lte: dueAt } },
+      { orderRecoveryState: 'processing', orderRecoveryLeaseUntil: null },
+    ],
+  }).sort({ orderRecoveryNextAt: 1, createdAt: 1 }).limit(batchLimit).select('_id').lean();
+
+  const outcomes = [];
+  for (const payment of due) {
+    if (shouldStop()) break;
+    outcomes.push(await recover(payment._id));
+  }
+  return outcomes;
+};
+
 // The ONLY place a payment is confirmed. It always re-verifies with the
 // payment provider and never trusts the frontend or the webhook body.
 export const processPaymentReference = async (reference, webhookHint = null) => {
@@ -437,22 +662,11 @@ export const processPaymentReference = async (reference, webhookHint = null) => 
     }
 
     if (payment.purpose === 'order') {
-      let order = await Order.findById(payment.order);
-      if (order && ['pending', 'payment_pending'].includes(order.status)) {
-        order = await markOrderPaid(order._id, payment.reference, {
-          paymentProvider: payment.provider,
-          paymentGatewayFee: payment.paymentGatewayFee || 0,
-          paymentGatewayFeeKnown: payment.paymentGatewayFeeKnown === true || payment.provider === 'hubtel',
-          ...(payment.provider === 'hubtel' ? { hubtelTransactionId: payment.hubtelTransactionId } : {}),
-        }) || await Order.findById(payment.order);
-      }
-      if (order && order.paymentReference === payment.reference) {
-        await recordOrderPaymentLedger(payment, order);
-        if (['paid', 'processing', 'successful'].includes(order.status)) {
-          await queuePaymentConfirmedSms(payment, order);
-        }
-        if (order.status === 'paid') await fulfillOrder(payment.order);
-      }
+      const enqueued = await Payment.updateOne(
+        { _id: payment._id, status: 'successful', purpose: 'order', orderRecoveryState: { $exists: false } },
+        { $set: { orderRecoveryState: 'pending', orderRecoveryNextAt: new Date() } }
+      );
+      if (enqueued.modifiedCount) await recoverConfirmedOrderPayment(payment._id, { allowLegacy: false });
     }
     return payment;
   }
@@ -577,6 +791,7 @@ export const processPaymentReference = async (reference, webhookHint = null) => 
     {
       $set: {
         status: 'successful',
+        ...(payment.purpose === 'order' ? { orderRecoveryState: 'pending', orderRecoveryNextAt: new Date(), orderRecoveryAttempts: 0 } : {}),
         paidAt: new Date(),
         verifiedAt: new Date(),
         paymentGatewayFee: gatewayFee,
@@ -611,44 +826,7 @@ export const processPaymentReference = async (reference, webhookHint = null) => 
     return confirmed;
   }
 
-  const paidOrder = await markOrderPaid(confirmed.order, confirmed.reference, {
-    paymentProvider: confirmed.provider,
-    paymentGatewayFee: gatewayFee,
-    paymentGatewayFeeKnown: gatewayFeeKnown,
-    ...(confirmed.provider === 'hubtel' ? { hubtelTransactionId: confirmed.hubtelTransactionId } : {}),
-  });
-
-  if (!paidOrder) {
-    // Money received but the order can no longer accept it (e.g. second payment).
-    await Transaction.create({
-      user: confirmed.user,
-      order: confirmed.order,
-      payment: confirmed._id,
-      type: 'payment_issue',
-      direction: 'info',
-      amount: confirmed.amount,
-      reference: confirmed.reference,
-      description: 'Payment received for an order that was not payable. Needs manual review.',
-    });
-    await notifyAdminsSafely({
-      eventId: `payment-order-review:${confirmed._id}`,
-      category: 'payments',
-      type: 'payment_requires_review',
-      title: 'Payment needs manual review',
-      message: `Payment ${confirmed.reference} was confirmed but its order was not payable.`,
-      priority: 'critical',
-      sound: true,
-      link: '/admin/transactions',
-      relatedPayment: confirmed._id,
-      relatedOrder: confirmed.order || null,
-    });
-    return confirmed;
-  }
-
-  await queuePaymentConfirmedSms(confirmed, paidOrder);
-
-  await recordOrderPaymentLedger(confirmed, paidOrder);
-  await fulfillOrder(paidOrder._id);
+  await recoverConfirmedOrderPayment(confirmed._id);
   return confirmed;
 };
 

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import mongoose from 'mongoose';
 
 process.env.MONGODB_URI = 'mongodb://127.0.0.1:27017/rabsdata-test';
 process.env.JWT_SECRET = 'test-only-not-a-secret';
@@ -19,12 +20,18 @@ const [
   import('../services/supplierCatalogService.js'),
 ]);
 
+mongoose.startSession = async () => ({
+  async withTransaction(callback) { return callback(); },
+  async endSession() {},
+});
+
 test('catalog scheduler refreshes immediately and repeats on its configured interval', async () => {
   const originalSetInterval = globalThis.setInterval;
   const originalConsoleError = console.error;
   let scheduled;
   let intervalsCreated = 0;
   let calls = 0;
+  let clearedTimer = null;
   const errors = [];
   globalThis.setInterval = (callback, intervalMs) => {
     intervalsCreated += 1;
@@ -35,12 +42,14 @@ test('catalog scheduler refreshes immediately and repeats on its configured inte
 
   try {
     const timer = startSupplierCatalogScheduler({
+      enabled: true,
       refreshCatalog: async () => {
         calls += 1;
         if (calls === 1) return [{ success: false, message: 'mock provider failure' }];
         if (calls === 2) throw new Error('mock thrown refresh failure');
         return [{ success: true }];
       },
+      clearIntervalFn: (value) => { clearedTimer = value; },
     });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(calls, 1);
@@ -61,9 +70,85 @@ test('catalog scheduler refreshes immediately and repeats on its configured inte
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(calls, 3);
     assert.equal(errors.length, 2);
+    await timer.stop();
+    assert.equal(clearedTimer, timer);
   } finally {
     globalThis.setInterval = originalSetInterval;
     console.error = originalConsoleError;
+  }
+});
+
+test('catalog scheduler stop waits for an active refresh and prevents later refreshes', async () => {
+  const originalSetInterval = globalThis.setInterval;
+  let scheduled;
+  let releaseRefresh;
+  let started = false;
+  let calls = 0;
+  globalThis.setInterval = (callback) => {
+    scheduled = { callback, unref() {} };
+    return scheduled;
+  };
+  const refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
+
+  try {
+    const timer = startSupplierCatalogScheduler({
+      enabled: true,
+      refreshCatalog: async () => {
+        calls += 1;
+        started = true;
+        await refreshGate;
+        return [{ success: true }];
+      },
+      clearIntervalFn() {},
+    });
+    while (!started) await new Promise((resolve) => setImmediate(resolve));
+    await scheduled.callback();
+    assert.equal(calls, 1);
+    let stopped = false;
+    const stopping = timer.stop().then(() => { stopped = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(stopped, false);
+
+    releaseRefresh();
+    await stopping;
+    await scheduled.callback();
+
+    assert.equal(stopped, true);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+  }
+});
+
+test('periodic catalog refresh is paused by default but can be explicitly enabled', async () => {
+  let intervalCalls = 0;
+  let refreshCalls = 0;
+  const paused = startSupplierCatalogScheduler({
+    enabled: false,
+    refreshCatalog: async () => { refreshCalls += 1; return [{ success: true }]; },
+    logger: { warn() {}, error() {} },
+  });
+  await paused.run();
+  assert.equal(paused.enabled, false);
+  assert.equal(refreshCalls, 0);
+
+  const originalSetInterval = globalThis.setInterval;
+  globalThis.setInterval = (callback) => {
+    intervalCalls += 1;
+    return { callback, unref() {}, stop() {} };
+  };
+  try {
+    const enabled = startSupplierCatalogScheduler({
+      enabled: true,
+      refreshCatalog: async () => { refreshCalls += 1; return [{ success: true }]; },
+      logger: { warn() {}, error() {} },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(intervalCalls, 1);
+    assert.equal(refreshCalls, 1);
+    await enabled.stop();
+  } finally {
+    globalThis.setInterval = originalSetInterval;
   }
 });
 
@@ -407,6 +492,175 @@ test('catalog refresh keeps multiple bundle sizes sharing a slug verified with t
   } finally {
     DataPackage.find = originals.dataFind;
     DataPackage.updateMany = originals.dataUpdateMany;
+    CatalogSyncState.findOne = originals.catalogFindOne;
+    CatalogSyncState.findOneAndUpdate = originals.catalogFindOneAndUpdate;
+    SupplierControl.findOne = originals.supplierFindOne;
+    SupplierControl.findOneAndUpdate = originals.supplierFindOneAndUpdate;
+    globalThis.fetch = originals.fetch;
+  }
+});
+
+test('catalog refresh stops publishing after its lease token is replaced', async () => {
+  const originals = {
+    dataFind: DataPackage.find,
+    dataUpdateMany: DataPackage.updateMany,
+    dataCreate: DataPackage.create,
+    catalogFindOne: CatalogSyncState.findOne,
+    catalogFindOneAndUpdate: CatalogSyncState.findOneAndUpdate,
+    supplierFindOne: SupplierControl.findOne,
+    supplierFindOneAndUpdate: SupplierControl.findOneAndUpdate,
+    fetch: globalThis.fetch,
+  };
+  const existing = {
+    _id: 'lease-lost-package',
+    network: 'MTN',
+    name: 'MTN Standard 1GB',
+    dataAmount: '1GB',
+    validity: 'Non-expiry',
+    bundleType: '',
+    restrictions: [],
+    volumeInMB: 1000,
+    providerCost: 4,
+    sellingPrice: 8,
+    providerPackageCode: 'mtn-standard',
+    providerPlanId: '',
+    supplierOffers: { padodatagh: {
+      packageCode: 'mtn-standard', planId: '', supplierCost: 4, network: 'MTN', volumeInMB: 1000,
+      validity: 'Non-expiry', bundleType: '', restrictions: [], catalogVerified: false, lastVerifiedAt: null,
+    } },
+    saves: 0,
+    set(path, value) { this.supplierOffers.padodatagh[path.split('.').at(-1)] = value; },
+    async save() { this.saves += 1; },
+  };
+  let lockOperations = 0;
+  DataPackage.find = async () => [existing];
+  DataPackage.updateMany = async () => { throw new Error('stale publisher must not update packages'); };
+  DataPackage.create = async () => { throw new Error('stale publisher must not create packages'); };
+  CatalogSyncState.findOne = () => ({ lean: async () => null });
+  CatalogSyncState.findOneAndUpdate = async (filter, update) => {
+    lockOperations += 1;
+    if (update.$set?.status === 'syncing') return { lockToken: update.$set.lockToken };
+    if (lockOperations === 2) return { lockToken: 'replacement-refresh-token' };
+    return { lockToken: filter.lockToken };
+  };
+  SupplierControl.findOne = () => ({ lean: async () => ({ suppliers: { padodatagh: {} } }) });
+  SupplierControl.findOneAndUpdate = async () => ({});
+  globalThis.fetch = async () => new Response(JSON.stringify({ success: true, data: [
+    { offer_slug: 'mtn-standard', name: 'Standard 1GB Non-expiry', network: 'mtn', volume: 1000, price: 4, restrictions: [] },
+  ] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+  try {
+    const result = await syncSupplierOffers();
+    assert.equal(result.success, false);
+    assert.equal(result.summary.updated, 0);
+    assert.equal(existing.saves, 0);
+    assert.ok(lockOperations >= 3);
+  } finally {
+    DataPackage.find = originals.dataFind;
+    DataPackage.updateMany = originals.dataUpdateMany;
+    DataPackage.create = originals.dataCreate;
+    CatalogSyncState.findOne = originals.catalogFindOne;
+    CatalogSyncState.findOneAndUpdate = originals.catalogFindOneAndUpdate;
+    SupplierControl.findOne = originals.supplierFindOne;
+    SupplierControl.findOneAndUpdate = originals.supplierFindOneAndUpdate;
+    globalThis.fetch = originals.fetch;
+  }
+});
+
+test('a resumed stale refresh cannot overwrite a replacement worker catalog publication', async () => {
+  const originals = {
+    dataFind: DataPackage.find,
+    catalogFindOne: CatalogSyncState.findOne,
+    catalogFindOneAndUpdate: CatalogSyncState.findOneAndUpdate,
+    supplierFindOne: SupplierControl.findOne,
+    supplierFindOneAndUpdate: SupplierControl.findOneAndUpdate,
+    fetch: globalThis.fetch,
+  };
+  const slug = 'telecel-lock-fenced';
+  const packageRecord = {
+    _id: 'lock-fenced-package',
+    network: 'Telecel',
+    name: 'Telecel Standard 1GB',
+    dataAmount: '1GB',
+    validity: 'Non-expiry',
+    bundleType: '',
+    restrictions: [],
+    volumeInMB: 1000,
+    providerCost: 4,
+    sellingPrice: 8,
+    providerPackageCode: slug,
+    providerPlanId: '',
+    supplierOffers: { padodatagh: {
+      packageCode: slug, planId: '', supplierCost: 4, network: 'Telecel', volumeInMB: 1000,
+      validity: 'Non-expiry', bundleType: '', restrictions: [], catalogVerified: false, lastVerifiedAt: null,
+    } },
+    set(path, value) {
+      const parts = path.split('.');
+      let target = this;
+      while (parts.length > 1) target = target[parts.shift()];
+      target[parts[0]] = value;
+    },
+    async save() {},
+  };
+  const planA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const planB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  let lockOwner = null;
+  let fetchCalls = 0;
+  let releaseWorkerA;
+  let workerAFetchStarted;
+  const workerAGate = new Promise((resolve) => { releaseWorkerA = resolve; });
+  const workerAStarted = new Promise((resolve) => { workerAFetchStarted = resolve; });
+
+  DataPackage.find = async () => [packageRecord];
+  CatalogSyncState.findOne = () => ({ lean: async () => null });
+  CatalogSyncState.findOneAndUpdate = async (filter, update) => {
+    const values = update.$set || {};
+    if (values.status === 'syncing') {
+      if (lockOwner && lockOwner.lockUntil > Date.now()) return null;
+      lockOwner = { lockToken: values.lockToken, status: 'syncing', lockUntil: values.lockUntil };
+      return { ...lockOwner };
+    }
+    if (filter.lockToken !== lockOwner?.lockToken || values.lockUntil?.$gt && lockOwner.lockUntil <= Date.now()) return null;
+    if (values.status === 'idle') {
+      lockOwner = { ...lockOwner, ...values };
+      return { ...lockOwner };
+    }
+    lockOwner = { ...lockOwner, ...values };
+    return { ...lockOwner };
+  };
+  SupplierControl.findOne = () => ({ lean: async () => ({ suppliers: { padodatagh: {} } }) });
+  SupplierControl.findOneAndUpdate = async () => ({});
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    if (fetchCalls === 1) {
+      workerAFetchStarted();
+      await workerAGate;
+      return new Response(JSON.stringify({ success: true, data: [
+        { plan_id: planA, offer_id: planA, offer_slug: slug, name: 'Telecel Standard 1GB', network: 'telecel', volume: 1000, price: 4, description: 'Non-expiry', restrictions: [] },
+      ] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({ success: true, data: [
+      { plan_id: planB, offer_id: planB, offer_slug: slug, name: 'Telecel Standard 1GB', network: 'telecel', volume: 1000, price: 4, description: 'Non-expiry', restrictions: [] },
+    ] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
+  try {
+    const workerA = syncSupplierOffers();
+    await workerAStarted;
+    lockOwner.lockUntil = Date.now() - 1;
+
+    const resultB = await syncSupplierOffers();
+    assert.equal(resultB.success, true);
+    assert.equal(packageRecord.providerPlanId, planB);
+
+    releaseWorkerA();
+    const resultA = await workerA;
+    assert.equal(resultA.success, false);
+    assert.equal(packageRecord.providerPlanId, planB);
+    assert.equal(packageRecord.supplierOffers.padodatagh.planId, planB);
+  } finally {
+    releaseWorkerA();
+    DataPackage.find = originals.dataFind;
     CatalogSyncState.findOne = originals.catalogFindOne;
     CatalogSyncState.findOneAndUpdate = originals.catalogFindOneAndUpdate;
     SupplierControl.findOne = originals.supplierFindOne;

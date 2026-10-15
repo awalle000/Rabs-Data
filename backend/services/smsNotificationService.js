@@ -170,17 +170,34 @@ export const dispatchNextSms = async (now = new Date()) => {
 
 export const startSmsDispatcher = () => {
   let running = false;
+  let stopping = false;
+  let activeRun = null;
   const timer = setInterval(async () => {
-    if (running || !isSmsEnabled()) return;
+    if (stopping || running || !isSmsEnabled()) return;
     running = true;
+    activeRun = (async () => {
+      try {
+        await dispatchNextSms();
+      } catch {
+        console.error('[sms] dispatch worker failed');
+      } finally {
+        running = false;
+      }
+    })();
     try {
-      await dispatchNextSms();
+      await activeRun;
     } catch {
-      console.error('[sms] dispatch worker failed');
+      // dispatchNextSms failures are logged inside the worker task.
     } finally {
-      running = false;
+      activeRun = null;
     }
   }, SEND_INTERVAL_MS);
   timer.unref();
+  timer.stop = async () => {
+    if (stopping) return;
+    stopping = true;
+    clearInterval(timer);
+    if (activeRun) await activeRun;
+  };
   return timer;
 };

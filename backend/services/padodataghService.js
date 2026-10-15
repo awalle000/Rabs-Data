@@ -144,7 +144,6 @@ const request = async (path, { method = 'GET', body, purchase = false, catalogVo
         requestFields: body && typeof body === 'object' ? Object.keys(body) : [],
         offerSlug: typeof body?.offer_slug === 'string' ? body.offer_slug.slice(0, 100) : null,
         planId: typeof body?.plan_id === 'string' && isValidPlanId(body.plan_id) ? body.plan_id : null,
-        planId: typeof body?.plan_id === 'string' && isValidPlanId(body.plan_id) ? body.plan_id : null,
         volume: Number.isFinite(Number(body?.volume ?? catalogVolume)) ? Number(body?.volume ?? catalogVolume) : null,
         merchantReference: typeof body?.reference === 'string' ? body.reference.slice(0, 128) : null,
         phoneFormat: typeof body?.phone === 'string' && /^0\d{9}$/.test(body.phone) ? 'Ghana-local-10-digit' : null,
@@ -247,7 +246,7 @@ export const getOrderStatus = async ({ reference, providerReference }) => {
   const { data } = await request(`/order/status/${encodeURIComponent(identifier)}`);
   const order = data.data && typeof data.data === 'object' ? data.data : data;
   const status = String(order.status || '').toLowerCase();
-  const normalizedStatus = status === 'completed' ? 'successful' : status === 'rejected' ? 'failed' : status === 'processing' ? 'processing' : 'uncertain';
+  const normalizedStatus = ['completed', 'delivered'].includes(status) ? 'successful' : status === 'rejected' ? 'failed' : status === 'processing' ? 'processing' : 'uncertain';
   return {
     status: normalizedStatus,
     supplierStatus: status || 'uncertain',
@@ -265,7 +264,7 @@ export const getHistoryOrder = async (reference) => {
   if (!order) return null;
   const status = String(order.status || '').toLowerCase();
   return {
-  status: status === 'completed' ? 'successful' : status === 'rejected' ? 'failed' : status === 'processing' ? 'processing' : 'uncertain',
+  status: ['completed', 'delivered'].includes(status) ? 'successful' : status === 'rejected' ? 'failed' : status === 'processing' ? 'processing' : 'uncertain',
   supplierStatus: status || 'uncertain',
   providerReference: order.orderId || null,
   clientReference: order.reference || reference,

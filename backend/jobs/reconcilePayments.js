@@ -1,6 +1,8 @@
 import Payment from '../models/Payment.js';
 import { isPaymentConfigured } from '../services/paymentService.js';
+import { runConfirmedOrderPaymentRecovery } from '../services/orderFulfillmentService.js';
 import { safeReconcilePayment } from '../services/reconciliationService.js';
+import env from '../config/environment.js';
 
 const RUN_EVERY_MS = 60 * 1000;
 const FIRST_CHECK_AFTER_MS = 2 * 60 * 1000;
@@ -10,31 +12,45 @@ const BATCH_SIZE = 20;
 
 let running = false;
 
-export const reconcilePendingPayments = async () => {
-  if (running || (!isPaymentConfigured('paystack') && !isPaymentConfigured('hubtel'))) return;
+export const reconcilePendingPayments = async ({
+  shouldStop = () => false,
+  orderRecoveryEnabled = env.paymentOrderRecoveryEnabled,
+  recoverOrderPayments = runConfirmedOrderPaymentRecovery,
+  paymentConfigured = isPaymentConfigured,
+  paymentModel = Payment,
+  reconcilePayment = safeReconcilePayment,
+} = {}) => {
+  if (running) return;
   running = true;
 
   try {
-    const now = Date.now();
-    const due = await Payment.find({
-      provider: { $in: ['paystack', 'hubtel'] },
-      status: { $in: ['initialized', 'pending'] },
-      createdAt: {
-        $lte: new Date(now - FIRST_CHECK_AFTER_MS),
-        $gte: new Date(now - GIVE_UP_AFTER_MS),
-      },
-      $or: [{ lastCheckedAt: null }, { lastCheckedAt: { $lte: new Date(now - RECHECK_EVERY_MS) } }],
-    })
-      .sort({ createdAt: 1 })
-      .limit(BATCH_SIZE);
+    if (paymentConfigured('paystack') || paymentConfigured('hubtel')) {
+      const now = Date.now();
+      const due = await paymentModel.find({
+        provider: { $in: ['paystack', 'hubtel'] },
+        status: { $in: ['initialized', 'pending'] },
+        createdAt: {
+          $lte: new Date(now - FIRST_CHECK_AFTER_MS),
+          $gte: new Date(now - GIVE_UP_AFTER_MS),
+        },
+        $or: [{ lastCheckedAt: null }, { lastCheckedAt: { $lte: new Date(now - RECHECK_EVERY_MS) } }],
+      })
+        .sort({ createdAt: 1 })
+        .limit(BATCH_SIZE);
 
-    for (const payment of due) {
-      await Payment.updateOne({ _id: payment._id }, { $set: { lastCheckedAt: new Date() } });
-      try {
-        await safeReconcilePayment({ payment });
-      } catch (error) {
-        console.error(`[reconcile] ${payment.reference}: ${error.message}`);
+      for (const payment of due) {
+        if (shouldStop()) break;
+        await paymentModel.updateOne({ _id: payment._id }, { $set: { lastCheckedAt: new Date() } });
+        try {
+          await reconcilePayment({ payment });
+        } catch (error) {
+          console.error(`[reconcile] ${payment.reference}: ${error.message}`);
+        }
       }
+    }
+
+    if (orderRecoveryEnabled) {
+      await recoverOrderPayments({ limit: BATCH_SIZE, shouldStop, allowLegacy: true });
     }
   } catch (error) {
     console.error('[reconcile] run failed:', error.message);
@@ -44,7 +60,20 @@ export const reconcilePendingPayments = async () => {
 };
 
 export const startPaymentReconciliation = () => {
-  const timer = setInterval(reconcilePendingPayments, RUN_EVERY_MS);
+  let stopping = false;
+  let activeRun = null;
+  const tick = async () => {
+    if (stopping || activeRun) return;
+    activeRun = reconcilePendingPayments({ shouldStop: () => stopping });
+    try { await activeRun; } finally { activeRun = null; }
+  };
+  const timer = setInterval(() => { void tick(); }, RUN_EVERY_MS);
   timer.unref();
+  timer.stop = async () => {
+    if (stopping) return;
+    stopping = true;
+    clearInterval(timer);
+    if (activeRun) await activeRun;
+  };
   return timer;
 };

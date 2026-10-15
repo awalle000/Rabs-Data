@@ -15,6 +15,7 @@ const [
   { default: SmsNotification },
   paymentService,
   fulfillment,
+  dataProvider,
 ] = await Promise.all([
   import('../models/Payment.js'),
   import('../models/Order.js'),
@@ -23,6 +24,7 @@ const [
   import('../models/SmsNotification.js'),
   import('../services/paymentService.js'),
   import('../services/orderFulfillmentService.js'),
+  import('../services/dataProviderService.js'),
 ]);
 
 const makeHarness = ({ paymentOverrides = {}, verification, concurrent = false } = {}) => {
@@ -59,7 +61,8 @@ const makeHarness = ({ paymentOverrides = {}, verification, concurrent = false }
   Payment.findOne = async ({ reference }) => reference === payment.reference ? { ...payment } : null;
   Payment.findById = async () => ({ ...payment });
   Payment.findOneAndUpdate = async (filter, update) => {
-    if (filter._id !== payment._id || !filter.status.$in.includes(payment.status)) return null;
+    const allowedStatuses = Array.isArray(filter.status?.$in) ? filter.status.$in : [filter.status];
+    if (filter._id !== payment._id || !allowedStatuses.includes(payment.status)) return null;
     Object.assign(payment, update.$set);
     return { ...payment };
   };
@@ -141,12 +144,71 @@ test('verified Paystack success conditionally applies payment and fulfillment on
     assert.equal(harness.payment.providerReference, 'paystack-id-1');
     assert.equal(harness.payment.paymentGatewayFee, 0.3);
     assert.equal(harness.payment.paymentGatewayFeeKnown, true);
+    assert.equal(harness.payment.orderRecoveryState, 'pending');
+    assert.ok(harness.payment.orderRecoveryNextAt instanceof Date);
     assert.equal(harness.order.paymentProvider, 'paystack');
     assert.equal(harness.counts().paidTransitions, 1);
     assert.equal(harness.order.supplierSubmitted, false);
     assert.equal(harness.ledger.size, 1);
     assert.equal(harness.smsEvents.has(`payment-confirmed:${harness.payment._id}`), true);
   } finally {
+    await harness.restore();
+  }
+});
+
+test('confirmed payment recovery survives a crash after the payment success write', async () => {
+  const harness = makeHarness({ verification: successfulVerification });
+  const originalFindById = Order.findById;
+  let orderLookups = 0;
+  let verifierCalls = 0;
+  paymentService.setMockPaystackVerifier(async (reference, options) => {
+    verifierCalls += 1;
+    return successfulVerification(options.payment);
+  });
+  Order.findById = async (...args) => {
+    orderLookups += 1;
+    if (orderLookups === 2) throw new Error('simulated process interruption after payment persistence');
+    return originalFindById(...args);
+  };
+
+  try {
+    await assert.rejects(
+      fulfillment.processPaymentReference(harness.payment.reference),
+      /simulated process interruption/
+    );
+    assert.equal(harness.payment.status, 'successful');
+    assert.equal(harness.payment.orderRecoveryState, 'pending');
+
+    Order.findById = originalFindById;
+    await fulfillment.processPaymentReference(harness.payment.reference);
+
+    assert.equal(verifierCalls, 1);
+    assert.equal(harness.payment.status, 'successful');
+    assert.equal(harness.order.status, 'paid');
+    assert.equal(harness.payment.orderRecoveryState, 'pending');
+  } finally {
+    Order.findById = originalFindById;
+    await harness.restore();
+  }
+});
+
+test('ambiguous already-submitted supplier orders are not resubmitted by payment recovery', async () => {
+  const harness = makeHarness({ verification: successfulVerification });
+  harness.payment.status = 'successful';
+  harness.payment.orderRecoveryState = 'pending';
+  harness.order.status = 'processing';
+  harness.order.supplierSubmitted = true;
+  harness.order.supplierStatus = 'uncertain';
+  let purchaseAttempts = 0;
+  dataProvider.setMockPurchaser(async () => { purchaseAttempts += 1; throw new Error('purchase retry must not run'); });
+
+  try {
+    await fulfillment.processPaymentReference(harness.payment.reference);
+    assert.equal(harness.payment.orderRecoveryState, 'complete');
+    assert.equal(harness.order.supplierStatus, 'uncertain');
+    assert.equal(purchaseAttempts, 0);
+  } finally {
+    dataProvider.setMockPurchaser(null);
     await harness.restore();
   }
 });

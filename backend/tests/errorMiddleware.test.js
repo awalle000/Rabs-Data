@@ -33,3 +33,30 @@ test('error responses never expose stacks or internal server-error messages in d
     console.error = originalConsoleError;
   }
 });
+
+test('catalog refresh gate returns a safe retryable message and Retry-After header', () => {
+  const headers = {};
+  let statusCode;
+  let body;
+  errorHandler(
+    Object.assign(new Error('refresh active'), {
+      isOperational: true,
+      statusCode: 503,
+      code: 'CATALOG_REFRESH_IN_PROGRESS',
+      message: 'The data catalog is being refreshed and is temporarily unavailable. Please retry shortly.',
+      retryAfterSeconds: 15,
+    }),
+    { method: 'GET', path: '/api/data/catalog' },
+    {
+      setHeader(name, value) { headers[name] = value; },
+      status(code) { statusCode = code; return this; },
+      json(value) { body = value; return value; },
+    },
+    () => {}
+  );
+
+  assert.equal(statusCode, 503);
+  assert.equal(headers['Retry-After'], '15');
+  assert.match(body.message, /catalog is being refreshed/i);
+  assert.equal(JSON.stringify(body).includes('refresh active'), false);
+});

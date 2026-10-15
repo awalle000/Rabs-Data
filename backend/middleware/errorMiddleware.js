@@ -31,7 +31,8 @@ export const errorHandler = (err, req, res, next) => {
   const handled = normalizeError(err);
   const statusCode = handled.statusCode || 500;
 
-  if (statusCode >= 500) {
+  const catalogRefresh = handled.code === 'CATALOG_REFRESH_IN_PROGRESS';
+  if (statusCode >= 500 && !catalogRefresh) {
     if (req.requestId) {
       console.error('[api-error]', {
         method: req.method,
@@ -45,9 +46,13 @@ export const errorHandler = (err, req, res, next) => {
     }
   }
 
+  if (catalogRefresh && handled.retryAfterSeconds) {
+    res.setHeader('Retry-After', String(handled.retryAfterSeconds));
+  }
+
   res.status(statusCode).json({
     success: false,
-    message: statusCode >= 500 ? 'Something went wrong' : handled.message,
+    message: statusCode >= 500 && !catalogRefresh ? 'Something went wrong' : handled.message,
     ...(handled.code ? { code: handled.code } : {}),
     ...(handled.details ? { errors: handled.details } : {}),
   });

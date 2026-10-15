@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import mongoose from 'mongoose';
 import DataPackage from '../models/DataPackage.js';
 import CatalogSyncState from '../models/CatalogSyncState.js';
 import env from '../config/environment.js';
@@ -5,6 +7,8 @@ import * as padodatagh from './padodataghService.js';
 import { recordSupplierHealth, recordSupplierEvent } from './supplierControlService.js';
 
 let catalogSchedulerTimer = null;
+let catalogRefreshInFlight = null;
+let catalogSchedulerState = 'not_started';
 
 const PROVIDER = {
   key: 'padodatagh',
@@ -72,9 +76,11 @@ export const supplierOfferMatchesPackage = (packageRecord, offer) => {
   );
 };
 
-export const findMatchingPackage = async ({ offer }) => {
+export const findMatchingPackage = async ({ offer, session }) => {
   if (!offer.providerPackageCode || offer.hasUnstructuredConditions || offer.hasValidityConflict || !offer.validity || offer.validity === 'Unknown') return null;
-  const candidates = await DataPackage.find({ network: offer.network, volumeInMB: offer.volumeInMB, validity: offer.validity });
+  let query = DataPackage.find({ network: offer.network, volumeInMB: offer.volumeInMB, validity: offer.validity });
+  if (session && typeof query.session === 'function') query = query.session(session);
+  const candidates = await query;
   const matches = candidates.filter((record) => supplierOfferMatchesPackage(record, offer));
   return matches.length === 1 ? matches[0] : null;
 };
@@ -96,7 +102,7 @@ export const syncSupplierOffers = async ({ supplier = 'PadodaTagh' } = {}) => {
   }
 
   const startedAt = new Date();
-  const lockToken = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const lockToken = randomUUID();
   const previous = await CatalogSyncState.findOne({ name: `${provider.key}_catalog` }).lean();
   if (previous?.status === 'syncing' && previous.lockUntil && new Date(previous.lockUntil) > startedAt) {
     return { success: false, skipped: true, reason: 'already-running', status: previous.status };
@@ -113,33 +119,60 @@ export const syncSupplierOffers = async ({ supplier = 'PadodaTagh' } = {}) => {
   if (!locked || locked.lockToken !== lockToken) return { success: false, skipped: true, reason: 'already-running' };
 
   const summary = { added: 0, updated: 0, unavailable: 0, deactivated: 0, total: 0, unmatched: 0, costChanges: [] };
+  const renewCatalogLock = async (session) => {
+    const renewed = await CatalogSyncState.findOneAndUpdate(
+      { name: `${provider.key}_catalog`, status: 'syncing', lockToken, lockUntil: { $gt: new Date() } },
+      { $set: { lockUntil: new Date(Date.now() + 10 * 60 * 1000) } },
+      { returnDocument: 'after', session }
+    );
+    if (!renewed || renewed.lockToken !== lockToken) {
+      const error = new Error('Catalog refresh lost its publication lease; stale refresh stopped.');
+      error.code = 'CATALOG_SYNC_LOCK_LOST';
+      throw error;
+    }
+  };
+  const withCatalogLock = async (operation) => {
+    const session = await mongoose.startSession();
+    try {
+      let result;
+      await session.withTransaction(async () => {
+        await renewCatalogLock(session);
+        result = await operation(session);
+      });
+      return result;
+    } finally {
+      await session.endSession();
+    }
+  };
   try {
     const offers = await provider.fetchOffers();
     const verifiedAt = new Date();
     for (const offer of offers) {
       if (!offer.network || !offer.volumeInMB || !offer.providerPackageCode || !Number.isFinite(offer.providerCost)) continue;
       summary.total += 1;
-      if (offer.hasUnstructuredConditions || offer.hasValidityConflict || offer.validity === 'Unknown') {
-        await DataPackage.updateMany(
-          { 'supplierOffers.padodatagh.packageCode': offer.providerPackageCode },
-          { $set: {
-            'supplierOffers.padodatagh.lastVerifiedAt': null,
-            'supplierOffers.padodatagh.hasUnstructuredConditions': Boolean(offer.hasUnstructuredConditions),
-            'supplierOffers.padodatagh.hasValidityConflict': Boolean(offer.hasValidityConflict || offer.validity === 'Unknown'),
-            'supplierOffers.padodatagh.catalogVerified': false,
-          } }
-        );
-        summary.unavailable += 1;
-        continue;
-      }
-      const record = await findMatchingPackage({ offer });
+      let outcome;
+      try {
+        outcome = await withCatalogLock(async (session) => {
+          if (offer.hasUnstructuredConditions || offer.hasValidityConflict || offer.validity === 'Unknown') {
+            await DataPackage.updateMany(
+              { 'supplierOffers.padodatagh.packageCode': offer.providerPackageCode },
+              { $set: {
+                'supplierOffers.padodatagh.lastVerifiedAt': null,
+                'supplierOffers.padodatagh.hasUnstructuredConditions': Boolean(offer.hasUnstructuredConditions),
+                'supplierOffers.padodatagh.hasValidityConflict': Boolean(offer.hasValidityConflict || offer.validity === 'Unknown'),
+                'supplierOffers.padodatagh.catalogVerified': false,
+              } },
+              { session }
+            );
+            return { kind: 'unavailable' };
+          }
 
-      if (!record) {
-        const supplierOffers = {
-          [provider.key]: { packageCode: offer.providerPackageCode, planId: offer.planId || '', supplierCost: offer.providerCost, network: offer.network, volumeInMB: offer.volumeInMB, validity: offer.validity, bundleType: offer.bundleType || '', restrictions: offer.restrictions ?? null, hasUnstructuredConditions: Boolean(offer.hasUnstructuredConditions), hasValidityConflict: Boolean(offer.hasValidityConflict || offer.validity === 'Unknown'), lastVerifiedAt: verifiedAt },
-        };
-        try {
-          await DataPackage.create({
+          const record = await findMatchingPackage({ offer, session });
+          if (!record) {
+            const supplierOffers = {
+              [provider.key]: { packageCode: offer.providerPackageCode, planId: offer.planId || '', supplierCost: offer.providerCost, network: offer.network, volumeInMB: offer.volumeInMB, validity: offer.validity, bundleType: offer.bundleType || '', restrictions: offer.restrictions ?? null, hasUnstructuredConditions: Boolean(offer.hasUnstructuredConditions), hasValidityConflict: Boolean(offer.hasValidityConflict || offer.validity === 'Unknown'), lastVerifiedAt: verifiedAt },
+            };
+            await DataPackage.create([{
             network: offer.network,
             name: offer.name,
             dataAmount: offer.dataAmount,
@@ -153,56 +186,71 @@ export const syncSupplierOffers = async ({ supplier = 'PadodaTagh' } = {}) => {
             providerPlanId: supplier === 'PadodaTagh' ? offer.planId || '' : '',
             supplierOffers,
             isActive: false,
-          });
-          summary.added += 1;
-        } catch (error) {
-          if (error?.code !== 11000) throw error;
-          summary.unmatched += 1;
-        }
-        continue;
-      }
+            }], { session });
+            return { kind: 'added' };
+          }
 
-      if (Number(record.providerCost) !== Number(offer.providerCost)) {
-        record.set(`supplierOffers.${provider.key}.lastVerifiedAt`, null);
-        record.set(`supplierOffers.${provider.key}.catalogVerified`, false);
-        await record.save();
-        summary.costChanges.push({
-          packageId: String(record._id),
-          packageName: record.name,
-          storedSupplierCost: Number(record.providerCost),
-          observedSupplierCost: offer.providerCost,
+          if (Number(record.providerCost) !== Number(offer.providerCost)) {
+            record.set(`supplierOffers.${provider.key}.lastVerifiedAt`, null);
+            record.set(`supplierOffers.${provider.key}.catalogVerified`, false);
+            await record.save({ session });
+            return {
+              kind: 'cost-change',
+              costChange: {
+                packageId: String(record._id),
+                packageName: record.name,
+                storedSupplierCost: Number(record.providerCost),
+                observedSupplierCost: offer.providerCost,
+              },
+            };
+          }
+
+          record.set(`supplierOffers.${provider.key}.packageCode`, offer.providerPackageCode);
+          record.set(`supplierOffers.${provider.key}.planId`, offer.planId || '');
+          record.set(`supplierOffers.${provider.key}.supplierCost`, offer.providerCost);
+          record.set(`supplierOffers.${provider.key}.network`, offer.network);
+          record.set(`supplierOffers.${provider.key}.volumeInMB`, offer.volumeInMB);
+          record.set(`supplierOffers.${provider.key}.validity`, offer.validity);
+          record.set(`supplierOffers.${provider.key}.bundleType`, offer.bundleType || '');
+          record.set(`supplierOffers.${provider.key}.restrictions`, offer.restrictions ?? null);
+          record.set(`supplierOffers.${provider.key}.hasUnstructuredConditions`, Boolean(offer.hasUnstructuredConditions));
+          record.set(`supplierOffers.${provider.key}.hasValidityConflict`, Boolean(offer.hasValidityConflict || offer.validity === 'Unknown'));
+          record.set(`supplierOffers.${provider.key}.lastVerifiedAt`, verifiedAt);
+          record.set(`supplierOffers.${provider.key}.catalogVerified`, true);
+          record.set(`supplierOffers.${provider.key}.bundleType`, offer.bundleType || '');
+          record.set(`supplierOffers.${provider.key}.restrictions`, offer.restrictions ?? null);
+          if (supplier === 'PadodaTagh') {
+            record.providerPackageCode = offer.providerPackageCode;
+            record.providerPlanId = offer.planId || '';
+          }
+          await record.save({ session });
+          return { kind: 'updated', unavailable: Boolean(offer.unavailable) };
         });
+      } catch (error) {
+        if (error?.code !== 11000) throw error;
+        summary.unmatched += 1;
         continue;
       }
 
-      record.set(`supplierOffers.${provider.key}.packageCode`, offer.providerPackageCode);
-      record.set(`supplierOffers.${provider.key}.planId`, offer.planId || '');
-      record.set(`supplierOffers.${provider.key}.supplierCost`, offer.providerCost);
-      record.set(`supplierOffers.${provider.key}.network`, offer.network);
-      record.set(`supplierOffers.${provider.key}.volumeInMB`, offer.volumeInMB);
-      record.set(`supplierOffers.${provider.key}.validity`, offer.validity);
-      record.set(`supplierOffers.${provider.key}.bundleType`, offer.bundleType || '');
-      record.set(`supplierOffers.${provider.key}.restrictions`, offer.restrictions ?? null);
-      record.set(`supplierOffers.${provider.key}.hasUnstructuredConditions`, Boolean(offer.hasUnstructuredConditions));
-      record.set(`supplierOffers.${provider.key}.hasValidityConflict`, Boolean(offer.hasValidityConflict || offer.validity === 'Unknown'));
-      record.set(`supplierOffers.${provider.key}.lastVerifiedAt`, verifiedAt);
-      record.set(`supplierOffers.${provider.key}.catalogVerified`, true);
-      record.set(`supplierOffers.${provider.key}.bundleType`, offer.bundleType || '');
-      record.set(`supplierOffers.${provider.key}.restrictions`, offer.restrictions ?? null);
-      if (supplier === 'PadodaTagh') {
-        record.providerPackageCode = offer.providerPackageCode;
-        record.providerPlanId = offer.planId || '';
+      if (outcome.kind === 'unavailable') summary.unavailable += 1;
+      if (outcome.kind === 'added') summary.added += 1;
+      if (outcome.kind === 'cost-change') summary.costChanges.push(outcome.costChange);
+      if (outcome.kind === 'updated') {
+        if (outcome.unavailable) summary.unavailable += 1;
+        summary.updated += 1;
       }
-      if (offer.unavailable) summary.unavailable += 1;
-      await record.save();
-      summary.updated += 1;
     }
 
     await recordSupplierHealth('padodatagh', { ok: true });
-    await CatalogSyncState.findOneAndUpdate(
-      { name: `${provider.key}_catalog`, lockToken },
+    const published = await CatalogSyncState.findOneAndUpdate(
+      { name: `${provider.key}_catalog`, status: 'syncing', lockToken, lockUntil: { $gt: new Date() } },
       { $set: { status: 'idle', lockToken: null, lockUntil: null, lastFinishedAt: new Date(), lastSuccessfulAt: new Date(), lastError: '', failureStreak: 0, summary } }
     );
+    if (!published) {
+      const error = new Error('Catalog refresh lost its publication lease before completion.');
+      error.code = 'CATALOG_SYNC_LOCK_LOST';
+      throw error;
+    }
     const costMessage = summary.costChanges.length
       ? ` ${summary.costChanges.length} offer(s) with changed supplier cost remain unavailable until manually reconciled; stored costs and retail prices were preserved.`
       : '';
@@ -222,21 +270,39 @@ export const syncSupplierOffers = async ({ supplier = 'PadodaTagh' } = {}) => {
 export const syncAllSupplierOffers = async () => [await syncSupplierOffers({ supplier: 'PadodaTagh' })];
 
 export const startSupplierCatalogScheduler = ({
+  enabled = env.supplierCatalogRefreshEnabled,
   refreshCatalog = syncAllSupplierOffers,
   intervalMs = env.padodatagh.syncIntervalMs,
+  clearIntervalFn = clearInterval,
+  logger = console,
 } = {}) => {
   if (catalogSchedulerTimer) return catalogSchedulerTimer;
+  if (!enabled) {
+    catalogSchedulerState = 'paused';
+    logger.warn('[supplier-catalog] periodic refresh paused; set SUPPLIER_CATALOG_REFRESH_ENABLED=true to enable');
+    return { enabled: false, stop: async () => {}, run: async () => {} };
+  }
 
+  let stopping = false;
+  catalogSchedulerState = 'enabled';
   const refresh = async () => {
-    try {
-      const results = await refreshCatalog();
-      for (const result of results) {
-        if (!result.success) {
-          console.error(`[supplier-catalog] refresh incomplete: ${result.message || result.reason || 'unknown error'}`);
+    if (stopping) return;
+    if (catalogRefreshInFlight) return catalogRefreshInFlight;
+    const currentRefresh = (async () => {
+      try {
+        const results = await refreshCatalog();
+        for (const result of results) {
+          if (!result.success) {
+            console.error(`[supplier-catalog] refresh incomplete: ${result.message || result.reason || 'unknown error'}`);
+          }
         }
+      } catch (error) {
+        logger.error('[supplier-catalog] refresh failed:', error.message);
       }
-    } catch (error) {
-      console.error('[supplier-catalog] refresh failed:', error.message);
+    })();
+    catalogRefreshInFlight = currentRefresh;
+    try { await currentRefresh; } finally {
+      if (catalogRefreshInFlight === currentRefresh) catalogRefreshInFlight = null;
     }
   };
 
@@ -245,6 +311,17 @@ export const startSupplierCatalogScheduler = ({
     void refresh();
   }, intervalMs);
   timer.unref();
+  timer.stop = async () => {
+    if (stopping) return;
+    stopping = true;
+    catalogSchedulerState = 'stopping';
+    clearIntervalFn(timer);
+    if (catalogRefreshInFlight) await catalogRefreshInFlight;
+    if (catalogSchedulerTimer === timer) catalogSchedulerTimer = null;
+    catalogSchedulerState = 'stopped';
+  };
   catalogSchedulerTimer = timer;
   return catalogSchedulerTimer;
 };
+
+export const getSupplierCatalogSchedulerState = () => catalogSchedulerState;

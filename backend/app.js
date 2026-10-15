@@ -7,6 +7,8 @@ import env from './config/environment.js';
 import { apiLimiter, webhookLimiter } from './middleware/rateLimitMiddleware.js';
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 import { handlePadodaTaghWebhook } from './webhooks/padodataghWebhook.js';
+import { getSupplierReconciliationRuntimeState } from './jobs/reconcileSupplierOrders.js';
+import { getSupplierCatalogSchedulerState } from './services/supplierCatalogService.js';
 import authRoutes from './routes/authRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import dataRoutes from './routes/dataRoutes.js';
@@ -57,6 +59,18 @@ app.get('/api/health', (req, res) => {
     database: {
       connected: dbReady,
       state: mongoose.connection.readyState,
+    },
+    supplierReconciliation: {
+      enabled: getSupplierReconciliationRuntimeState() === 'enabled',
+      mode: getSupplierReconciliationRuntimeState(),
+    },
+    supplierCatalogRefresh: {
+      enabled: getSupplierCatalogSchedulerState() === 'enabled',
+      mode: getSupplierCatalogSchedulerState(),
+    },
+    paymentOrderRecovery: {
+      enabled: env.paymentOrderRecoveryEnabled,
+      mode: env.paymentOrderRecoveryEnabled ? 'enabled' : 'paused',
     },
     time: new Date().toISOString(),
   };

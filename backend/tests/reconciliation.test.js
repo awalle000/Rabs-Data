@@ -9,6 +9,9 @@ import {
 } from '../services/reconciliationService.js';
 import { paymentReviewNotification, supplierPendingNotification } from '../services/adminNotificationEvents.js';
 import { canDebitWallet } from '../services/walletService.js';
+import { runConfirmedOrderPaymentRecovery } from '../services/orderFulfillmentService.js';
+import { reconcilePendingPayments } from '../jobs/reconcilePayments.js';
+import { recoverSuccessfulPayments } from '../jobs/auditLedger.js';
 
 const successVerification = {
   status: 'successful',
@@ -101,4 +104,124 @@ test('reconciliation logic rejects amount or currency mismatches before applying
   const decision = classifyPaymentVerification({ payment, verification: mismatched });
   assert.equal(decision.action, 'review');
   assert.equal(decision.reason, 'reference_amount_or_currency_mismatch');
+});
+
+test('confirmed order-payment recovery selects a bounded due batch and processes each reference once', async () => {
+  let filter;
+  let sort;
+  let limit;
+  let projection;
+  const processed = [];
+  const queries = [];
+  const dueAt = new Date(1000);
+  const duePayments = [{ _id: 'payment-1' }, { _id: 'payment-2' }];
+
+  const result = await runConfirmedOrderPaymentRecovery({
+    limit: 2,
+    paymentModel: {
+      find(value) {
+        queries.push(value);
+        const legacyQuery = value.orderRecoveryState?.$exists === false;
+        const query = {
+          sort(value) { sort = value; return this; },
+          limit(value) { limit = value; return this; },
+          select(value) { projection = value; return this; },
+          lean: async () => legacyQuery ? [] : duePayments,
+        };
+        if (legacyQuery) {
+          return {
+            limit(value) { limit = value; return this; },
+            select(value) { projection = value; return this; },
+            lean: async () => [],
+          };
+        }
+        filter = value;
+        return query;
+      },
+      async updateOne() { return { modifiedCount: 0 }; },
+    },
+    recover: async (paymentId) => { processed.push(paymentId); return { action: 'complete' }; },
+    now: () => dueAt,
+  });
+
+  assert.deepEqual(filter, {
+    status: 'successful',
+    purpose: 'order',
+    orderRecoveryNextAt: { $lte: dueAt },
+    $or: [
+      { orderRecoveryState: 'pending' },
+      { orderRecoveryState: 'processing', orderRecoveryLeaseUntil: { $lte: dueAt } },
+      { orderRecoveryState: 'processing', orderRecoveryLeaseUntil: null },
+    ],
+  });
+  assert.deepEqual(sort, { orderRecoveryNextAt: 1, createdAt: 1 });
+  assert.equal(limit, 2);
+  assert.equal(projection, '_id');
+  assert.deepEqual(processed, ['payment-1', 'payment-2']);
+  assert.equal(result.length, 2);
+  assert.deepEqual(queries[0], { status: 'successful', purpose: 'order', orderRecoveryState: { $exists: false } });
+});
+
+test('legacy confirmed payments are promoted in a bounded batch and leave the migration predicate', async () => {
+  const dueAt = new Date(2000);
+  const legacy = [{ _id: 'legacy-1' }, { _id: 'legacy-2' }];
+  const promoted = [];
+  let recoveries = 0;
+  const result = await runConfirmedOrderPaymentRecovery({
+    limit: 2,
+    paymentModel: {
+      find(filter) {
+        const isLegacy = filter.orderRecoveryState?.$exists === false;
+        return {
+          sort() { return this; },
+          limit(value) { assert.equal(value, 2); return this; },
+          select() { return this; },
+          lean: async () => isLegacy ? legacy : legacy.map(({ _id }) => ({ _id })),
+        };
+      },
+      async updateOne(filter, update) {
+        promoted.push({ filter, update });
+        return { modifiedCount: 1 };
+      },
+    },
+    recover: async () => { recoveries += 1; return { action: 'complete' }; },
+    now: () => dueAt,
+  });
+
+  assert.equal(promoted.length, 2);
+  assert.ok(promoted.every(({ update }) => update.$set.orderRecoveryState === 'pending'));
+  assert.ok(promoted.every(({ update }) => update.$set.orderRecoveryNextAt === dueAt));
+  assert.equal(recoveries, 2);
+  assert.equal(result.length, 2);
+});
+
+test('background confirmed-payment recovery remains paused unless explicitly enabled', async () => {
+  let recoveryCalls = 0;
+  const recoverOrderPayments = async () => { recoveryCalls += 1; };
+  const paymentConfigured = () => false;
+
+  await reconcilePendingPayments({ orderRecoveryEnabled: false, recoverOrderPayments, paymentConfigured });
+  assert.equal(recoveryCalls, 0);
+
+  await reconcilePendingPayments({ orderRecoveryEnabled: true, recoverOrderPayments, paymentConfigured });
+  assert.equal(recoveryCalls, 1);
+});
+
+test('ledger audit does not scan or recover successful payments when payment recovery is disabled', async () => {
+  let paymentScans = 0;
+  let recoveryCalls = 0;
+  const result = await recoverSuccessfulPayments({
+    enabled: false,
+    paymentModel: {
+      find() {
+        paymentScans += 1;
+        throw new Error('disabled recovery must not query payments');
+      },
+    },
+    recoverPayment: async () => { recoveryCalls += 1; },
+  });
+
+  assert.deepEqual(result, []);
+  assert.equal(paymentScans, 0);
+  assert.equal(recoveryCalls, 0);
 });

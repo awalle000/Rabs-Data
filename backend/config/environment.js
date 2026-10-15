@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { isSupplierCatalogRefreshEnabled, isSupplierReconciliationEnabled } from '../utils/supplierReconciliationPolicy.js';
 
 dotenv.config();
 
@@ -64,6 +65,9 @@ const env = Object.freeze({
   vapidSubject: process.env.VAPID_SUBJECT || '',
   currency: 'GHS',
   walletEnabled: process.env.WALLET_ENABLED !== 'false',
+  supplierReconciliationEnabled: isSupplierReconciliationEnabled(process.env.SUPPLIER_RECONCILIATION_ENABLED),
+  supplierCatalogRefreshEnabled: isSupplierCatalogRefreshEnabled(process.env.SUPPLIER_CATALOG_REFRESH_ENABLED),
+  paymentOrderRecoveryEnabled: process.env.PAYMENT_ORDER_RECOVERY_ENABLED === 'true',
   enabledNetworks: list(process.env.ENABLED_NETWORKS),
   allowPaymentsWithoutDelivery: process.env.ALLOW_PAYMENTS_WITHOUT_DELIVERY === 'true',
   supplierPendingAlertAfterMs: Number(process.env.SUPPLIER_PENDING_ALERT_AFTER_MS) || 10 * 60 * 1000,

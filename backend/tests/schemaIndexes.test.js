@@ -6,10 +6,12 @@ process.env.JWT_SECRET = 'test-only-not-a-secret';
 
 const [
   { default: Order },
+  { default: Payment },
   { default: PurchaseOperation },
   { default: SmsNotification },
 ] = await Promise.all([
   import('../models/Order.js'),
+  import('../models/Payment.js'),
   import('../models/PurchaseOperation.js'),
   import('../models/SmsNotification.js'),
 ]);
@@ -73,6 +75,10 @@ test('PurchaseOperation key has one globally unique index and expiresAt is not a
   const expiryIndexes = indexesFor(PurchaseOperation.schema, 'expiresAt');
   assert.deepEqual(expiryIndexes, [[{ expiresAt: 1 }, {}]]);
   assert.equal(PurchaseOperation.schema.path('expiresAt').options.expireAfterSeconds, undefined);
+});
+
+test('payment recovery index is intentionally migration-managed, not auto-created from the application schema', () => {
+  assert.deepEqual(indexesFor(Payment.schema, 'orderRecoveryNextAt'), []);
 });
 
 test('SMS event key is unique and private message fields are excluded by default', () => {

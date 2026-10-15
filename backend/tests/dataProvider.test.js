@@ -129,6 +129,20 @@ test('completed supplier status is accepted when the queried supplier UUID match
   assert.equal(requests, 1);
 });
 
+test('delivered supplier status is normalized as successful when the supplier UUID matches', async () => {
+  const supplierReference = 'fda7db3c-9fe9-41c3-9b44-35cc6fcf9ef9';
+  await withFetch(async () => jsonResponse({ success: true, data: {
+    orderId: supplierReference, reference: 'ORD-1694477', status: 'delivered',
+  } }), async () => {
+    const result = await dataProvider.checkTransactionStatus({
+      supplier: 'PadodaTagh', reference: 'DH-20261014-000001', providerReference: supplierReference,
+    });
+    assert.equal(result.status, 'successful');
+    assert.equal(result.supplierStatus, 'delivered');
+    assert.equal(result.providerReference, supplierReference);
+  });
+});
+
 test('pending supplier status remains nonterminal and unknown or malformed responses remain uncertain', async () => {
   for (const { response, expectedStatus, expectedSupplierStatus } of [
     { response: jsonResponse({ success: true, data: { orderId: 'supplier-order-3', reference: 'DH-EXPECTED-3', status: 'pending' } }), expectedStatus: 'uncertain' },
