@@ -106,6 +106,31 @@ test('admin can confirm an archive and receives success feedback', async () => {
   expect(adminService.getOrders).toHaveBeenCalledWith(expect.objectContaining({ archive: 'active' }));
 });
 
+test('order details always show archive action and explain why an ineligible order cannot be archived', async () => {
+  const processingOrder = { ...completedOrder, status: 'processing', supplierStatus: 'pending' };
+  adminService.getOrders.mockResolvedValue({ orders: [processingOrder], pagination: { page: 1, pages: 1 } });
+  adminService.getOrderDetails.mockResolvedValue({ order: processingOrder, payments: [], transactions: [] });
+  render(<MemoryRouter><AdminOrders /></MemoryRouter>);
+  fireEvent.click(await screen.findByText(processingOrder.orderId));
+
+  expect(await screen.findByRole('button', { name: 'Archive order' })).toBeDisabled();
+  expect(screen.getByText('Order cannot be archived')).toBeInTheDocument();
+  expect(screen.getByText(/Order status must be successful/)).toBeInTheDocument();
+  expect(adminService.archiveOrder).not.toHaveBeenCalled();
+});
+
+test('order details explain when required safety state is missing', async () => {
+  const legacyOrder = { ...completedOrder };
+  delete legacyOrder.needsReview;
+  adminService.getOrders.mockResolvedValue({ orders: [legacyOrder], pagination: { page: 1, pages: 1 } });
+  adminService.getOrderDetails.mockResolvedValue({ order: legacyOrder, payments: [], transactions: [] });
+  render(<MemoryRouter><AdminOrders /></MemoryRouter>);
+  fireEvent.click(await screen.findByText(legacyOrder.orderId));
+
+  expect(await screen.findByRole('button', { name: 'Archive order' })).toBeDisabled();
+  expect(screen.getByText('Review status is unknown.')).toBeInTheDocument();
+});
+
 test('archive failures are shown and repeated submissions are disabled while pending', async () => {
   vi.stubGlobal('confirm', vi.fn(() => true));
   let finishArchive;

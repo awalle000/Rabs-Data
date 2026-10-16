@@ -56,6 +56,20 @@ const COLUMNS = [
   { key: 'createdAt', label: 'Created At', render: (order) => formatDate(order.createdAt) },
 ];
 
+const getArchiveBlockReason = (order) => {
+  if (order.status !== 'successful') return `Order status must be successful (current: ${humanize(order.status || 'unknown')}).`;
+  if (order.paymentStatus !== 'paid') return `Payment must be confirmed as paid (current: ${humanize(order.paymentStatus || 'unknown')}).`;
+  if (order.supplierStatus !== 'completed') return `Supplier delivery must be confirmed complete (current: ${humanize(order.supplierStatus || 'unknown')}).`;
+  if (order.supplierSubmitted !== true) return 'Supplier submission is not confirmed.';
+  if (order.needsReview !== false) return order.needsReview ? 'This order is flagged for review.' : 'Review status is unknown.';
+  if (order.refundRequired !== false) return order.refundRequired ? 'A refund is required.' : 'Refund status is unknown.';
+  if (order.supplierRefunded !== false) return order.supplierRefunded ? 'The supplier has refunded this order.' : 'Supplier refund status is unknown.';
+  if (order.supplierReconcileLeaseUntil && new Date(order.supplierReconcileLeaseUntil) > new Date()) {
+    return 'Supplier reconciliation is currently in progress.';
+  }
+  return '';
+};
+
 function OrderDetail({ id, onUpdated }) {
   const { data, loading, error, reload } = useAsync(() => getOrderDetails(id), [id]);
   const [checkingSupplier, setCheckingSupplier] = useState(false);
@@ -67,9 +81,7 @@ function OrderDetail({ id, onUpdated }) {
   if (error) return <Alert>{error}</Alert>;
 
   const { order, payments, transactions } = data;
-  const canArchive = order.status === 'successful' && order.paymentStatus === 'paid' &&
-    order.supplierStatus === 'completed' && order.supplierSubmitted === true &&
-    !order.needsReview && !order.refundRequired && !order.supplierRefunded;
+  const archiveBlockReason = getArchiveBlockReason(order);
   const buyer = order.customer
     ? `${order.customer.name} (${order.customer.email})`
     : `Guest, paying number ${formatPhone(order.contactPhone)}${order.contactEmail ? `, ${order.contactEmail}` : ''}`;
@@ -172,16 +184,14 @@ function OrderDetail({ id, onUpdated }) {
       {order.failureReason && <Alert type="info">{order.failureReason}</Alert>}
 
       <div style={{ marginBottom: '1.25rem', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-        {(order.isArchived || canArchive) && (
-          <button
-            type="button"
-            className="btn btn--secondary btn--sm"
-            disabled={archiveBusy}
-            onClick={handleArchiveToggle}
-          >
-            {archiveBusy ? 'Saving...' : order.isArchived ? 'Restore order' : 'Archive order'}
-          </button>
-        )}
+        <button
+          type="button"
+          className="btn btn--primary btn--sm"
+          disabled={archiveBusy || (!order.isArchived && Boolean(archiveBlockReason))}
+          onClick={handleArchiveToggle}
+        >
+          {archiveBusy ? 'Saving...' : order.isArchived ? 'Restore order' : 'Archive order'}
+        </button>
         <button
           type="button"
           className="btn btn--secondary btn--sm"
@@ -191,6 +201,15 @@ function OrderDetail({ id, onUpdated }) {
           {checkingSupplier ? 'Checking supplier...' : 'Check Supplier Status'}
         </button>
       </div>
+      {order.isArchived ? (
+        <p className="muted" role="status">This order is archived. Restoring it returns it to the active orders view.</p>
+      ) : archiveBlockReason ? (
+        <Alert type="warning" title="Order cannot be archived">{archiveBlockReason}</Alert>
+      ) : (
+        <p className="muted" role="status">
+          Payment, ledger, wallet recovery, and purchase-operation records are checked by the server before archiving.
+        </p>
+      )}
 
       <dl className="order-detail__list">
         {rows.map(([label, value]) => (
