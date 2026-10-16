@@ -54,7 +54,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
     User.countDocuments({ role: 'customer' }),
     DataPackage.countDocuments({ isActive: true }),
     Order.countDocuments({ needsReview: true }),
-    Order.find().sort({ createdAt: -1 }).limit(10).populate('customer', 'name email phone'),
+    Order.find({ isArchived: { $ne: true } }).sort({ createdAt: -1 }).limit(10).populate('customer', 'name email phone'),
   ]);
 
   const byStatus = Object.fromEntries(statusAgg.map((row) => [row._id, row]));
@@ -110,8 +110,12 @@ export const getDashboard = asyncHandler(async (req, res) => {
 
 export const getOrders = asyncHandler(async (req, res) => {
   const { page, limit, skip } = getPagination(req.query);
-  const { status, paymentStatus, supplierStatus, network, search } = req.query;
+  const { status, paymentStatus, supplierStatus, network, search, archive = 'active' } = req.query;
+  if (!['active', 'archived'].includes(archive)) {
+    throw new AppError('Archive filter must be active or archived', 400);
+  }
   const filter = {};
+  filter.isArchived = archive === 'archived' ? true : { $ne: true };
 
   if (typeof status === 'string' && status.trim()) {
     const s = status.trim().toLowerCase();
@@ -168,6 +172,80 @@ export const getOrders = asyncHandler(async (req, res) => {
   ]);
 
   res.json({ success: true, orders, pagination: buildMeta(total, page, limit) });
+});
+
+const orderLookup = (id) => OBJECT_ID.test(id) ? { _id: id } : { orderId: id };
+
+const assertOrderCanBeArchived = (order) => {
+  if (
+    order.status !== 'successful' ||
+    order.paymentStatus !== 'paid' ||
+    order.supplierStatus !== 'completed' ||
+    order.supplierSubmitted !== true ||
+    order.needsReview === true ||
+    order.refundRequired === true ||
+    order.supplierRefunded === true ||
+    (order.supplierReconcileLeaseUntil && order.supplierReconcileLeaseUntil > new Date())
+  ) {
+    throw new AppError('Only fully paid, successfully delivered orders with no unresolved review, refund, or supplier activity can be archived.', 409);
+  }
+};
+
+export const archiveOrder = asyncHandler(async (req, res) => {
+  const order = await Order.findOne(orderLookup(req.params.id));
+  if (!order) throw new AppError('Order not found', 404);
+  if (order.isArchived) throw new AppError('Order is already archived', 409);
+  assertOrderCanBeArchived(order);
+
+  const [payments, transactions] = await Promise.all([
+    Payment.find({ order: order._id }).select('status orderRecoveryState').lean(),
+    Transaction.find({ order: order._id }).select('status type').lean(),
+  ]);
+  const unresolvedPayment = payments.some((payment) =>
+    !['successful', 'failed'].includes(payment.status) ||
+    ['pending', 'processing', 'review'].includes(payment.orderRecoveryState)
+  );
+  const unresolvedLedger = transactions.some((transaction) =>
+    transaction.status === 'pending' || ['payment_issue', 'refund'].includes(transaction.type)
+  );
+  if (unresolvedPayment || unresolvedLedger) {
+    throw new AppError('Order has unresolved payment, refund, or ledger activity and cannot be archived.', 409);
+  }
+
+  const at = new Date();
+  const archived = await Order.findOneAndUpdate(
+    {
+      _id: order._id,
+      isArchived: { $ne: true },
+      status: 'successful',
+      paymentStatus: 'paid',
+      supplierStatus: 'completed',
+      supplierSubmitted: true,
+      needsReview: { $ne: true },
+      refundRequired: { $ne: true },
+      supplierRefunded: { $ne: true },
+    },
+    {
+      $set: { isArchived: true },
+      $push: { archiveHistory: { action: 'archive', actor: req.user._id, at } },
+    },
+    { returnDocument: 'after' }
+  );
+  if (!archived) throw new AppError('Order state changed; refresh and verify it before archiving.', 409);
+  res.json({ success: true, order: archived });
+});
+
+export const restoreOrder = asyncHandler(async (req, res) => {
+  const restored = await Order.findOneAndUpdate(
+    { ...orderLookup(req.params.id), isArchived: true },
+    {
+      $set: { isArchived: false },
+      $push: { archiveHistory: { action: 'restore', actor: req.user._id, at: new Date() } },
+    },
+    { returnDocument: 'after' }
+  );
+  if (!restored) throw new AppError('Archived order not found', 404);
+  res.json({ success: true, order: restored });
 });
 
 export const getStaleSupplierOrders = asyncHandler(async (req, res) => {

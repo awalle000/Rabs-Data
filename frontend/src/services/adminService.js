@@ -7,6 +7,8 @@ export const getDashboard = () => get('/admin/dashboard');
 export const getOrders = (params) => get('/admin/orders', params);
 export const getStaleSupplierOrders = (params) => get('/admin/orders/stale-supplier', params);
 export const getOrderDetails = (id) => get(`/admin/orders/${id}`);
+export const archiveOrder = (id) => api.patch(`/admin/orders/${id}/archive`).then((res) => res.data);
+export const restoreOrder = (id) => api.patch(`/admin/orders/${id}/restore`).then((res) => res.data);
 
 export const getCustomers = (params) => get('/admin/customers', params);
 export const creditCustomerWallet = (id, payload) =>

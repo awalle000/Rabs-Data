@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import useAsync from '../../hooks/useAsync.js';
-import { getOrderDetails, getOrders, getStaleSupplierOrders, checkOrderSupplierStatus } from '../../services/adminService.js';
+import { getOrderDetails, getOrders, getStaleSupplierOrders, checkOrderSupplierStatus, archiveOrder, restoreOrder } from '../../services/adminService.js';
 import { NETWORKS, buyerLabel, humanize } from '../../utils/adminFormat.js';
 import { formatCurrency } from '../../utils/formatCurrency.js';
 import { formatDate } from '../../utils/formatDate.js';
@@ -12,6 +12,7 @@ import Pagination from '../../components/Pagination/Pagination.jsx';
 import Modal from '../../components/Modal/Modal.jsx';
 import Loader from '../../components/Loader/Loader.jsx';
 import Alert from '../../components/Alert/Alert.jsx';
+import { getErrorMessage } from '../../utils/errors.js';
 import './AdminOrders.css';
 
 const COLUMNS = [
@@ -59,11 +60,16 @@ function OrderDetail({ id, onUpdated }) {
   const { data, loading, error, reload } = useAsync(() => getOrderDetails(id), [id]);
   const [checkingSupplier, setCheckingSupplier] = useState(false);
   const [supplierNotice, setSupplierNotice] = useState(null);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveNotice, setArchiveNotice] = useState(null);
 
   if (loading) return <Loader label="Loading order..." />;
   if (error) return <Alert>{error}</Alert>;
 
   const { order, payments, transactions } = data;
+  const canArchive = order.status === 'successful' && order.paymentStatus === 'paid' &&
+    order.supplierStatus === 'completed' && order.supplierSubmitted === true &&
+    !order.needsReview && !order.refundRequired && !order.supplierRefunded;
   const buyer = order.customer
     ? `${order.customer.name} (${order.customer.email})`
     : `Guest, paying number ${formatPhone(order.contactPhone)}${order.contactEmail ? `, ${order.contactEmail}` : ''}`;
@@ -86,6 +92,32 @@ function OrderDetail({ id, onUpdated }) {
       });
     } finally {
       setCheckingSupplier(false);
+    }
+  };
+
+  const handleArchiveToggle = async () => {
+    const restoring = order.isArchived;
+    const message = restoring
+      ? `Restore ${order.orderId} to the active orders list? Its order and financial history will remain unchanged.`
+      : `Archive ${order.orderId} from the active orders list? This does not delete the order or change payment, supplier, or financial history.`;
+    if (!window.confirm(message)) return;
+
+    setArchiveBusy(true);
+    setArchiveNotice(null);
+    try {
+      if (restoring) {
+        await restoreOrder(order._id);
+        setArchiveNotice({ type: 'success', text: 'Order restored to active orders.' });
+      } else {
+        await archiveOrder(order._id);
+        setArchiveNotice({ type: 'success', text: 'Order archived. Its full history is preserved.' });
+      }
+      reload();
+      onUpdated?.();
+    } catch (caught) {
+      setArchiveNotice({ type: 'error', text: getErrorMessage(caught) });
+    } finally {
+      setArchiveBusy(false);
     }
   };
 
@@ -121,6 +153,7 @@ function OrderDetail({ id, onUpdated }) {
   return (
     <div className="order-detail">
       {supplierNotice && <Alert type={supplierNotice.type}>{supplierNotice.text}</Alert>}
+      {archiveNotice && <Alert type={archiveNotice.type}>{archiveNotice.text}</Alert>}
       {order.needsReview && (
         <Alert type="warning" title="Needs review">
           Delivery status is unknown or a refund failed. Check with your data provider before refunding or resending.
@@ -139,6 +172,16 @@ function OrderDetail({ id, onUpdated }) {
       {order.failureReason && <Alert type="info">{order.failureReason}</Alert>}
 
       <div style={{ marginBottom: '1.25rem', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+        {(order.isArchived || canArchive) && (
+          <button
+            type="button"
+            className="btn btn--secondary btn--sm"
+            disabled={archiveBusy}
+            onClick={handleArchiveToggle}
+          >
+            {archiveBusy ? 'Saving...' : order.isArchived ? 'Restore order' : 'Archive order'}
+          </button>
+        )}
         <button
           type="button"
           className="btn btn--secondary btn--sm"
@@ -227,6 +270,7 @@ export default function AdminOrders() {
 
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState('');
+  const [archiveView, setArchiveView] = useState('active');
   const [network, setNetwork] = useState('');
   const [reviewOnly, setReviewOnly] = useState(searchParams.get('review') === '1');
   const [searchInput, setSearchInput] = useState(initialSearch);
@@ -244,8 +288,9 @@ export default function AdminOrders() {
         network: network || undefined,
         search: search || undefined,
         needsReview: reviewOnly ? 'true' : undefined,
+        archive: archiveView,
       }),
-    [page, status, network, search, reviewOnly]
+    [page, status, network, search, reviewOnly, archiveView]
   );
   const staleOrders = useAsync(
     () => getStaleSupplierOrders({ page: stalePage, limit: 10 }),
@@ -342,6 +387,20 @@ export default function AdminOrders() {
           />
         </div>
         <div className="field">
+          <label className="field__label" htmlFor="orderArchiveView">
+            Order view
+          </label>
+          <select
+            id="orderArchiveView"
+            className="field__control"
+            value={archiveView}
+            onChange={reset(setArchiveView)}
+          >
+            <option value="active">Active orders</option>
+            <option value="archived">Archived orders</option>
+          </select>
+        </div>
+        <div className="field">
           <label className="field__label" htmlFor="orderStatus">
             Status
           </label>
@@ -387,12 +446,12 @@ export default function AdminOrders() {
       {!error && (
         <div className="card">
           <TransactionTable
-            caption="All orders"
+            caption={archiveView === 'archived' ? 'Archived orders' : 'Active orders'}
             columns={COLUMNS}
             rows={data?.orders || []}
             loading={loading && !data}
             onRowClick={(order) => setSelectedId(order._id)}
-            emptyTitle="No orders found"
+            emptyTitle={archiveView === 'archived' ? 'No archived orders' : 'No active orders found'}
             emptyMessage="Try changing or clearing the filters."
           />
           <Pagination page={page} pages={data?.pagination?.pages} onChange={setPage} />

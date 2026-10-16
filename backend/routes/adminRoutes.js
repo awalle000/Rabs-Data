@@ -2,6 +2,8 @@ import express from 'express';
 import {
   getDashboard,
   getOrders,
+  archiveOrder,
+  restoreOrder,
   getStaleSupplierOrders,
   getOrderDetails,
   getCustomers,
@@ -68,6 +70,8 @@ router.post('/register-admin', registerRules, validate, registerAdmin);
 
 router.get('/orders', getOrders);
 router.get('/orders/stale-supplier', getStaleSupplierOrders);
+router.patch('/orders/:id/archive', orderIdParam, validate, archiveOrder);
+router.patch('/orders/:id/restore', orderIdParam, validate, restoreOrder);
 router.get('/orders/:id', orderIdParam, validate, getOrderDetails);
 router.post('/orders/:id/check-supplier-status', orderIdParam, validate, checkOrderSupplierStatus);
 

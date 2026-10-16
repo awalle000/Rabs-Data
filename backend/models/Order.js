@@ -95,6 +95,13 @@ const orderSchema = new mongoose.Schema(
     failureReason: { type: String },
     refundRequired: { type: Boolean, default: false },
     needsReview: { type: Boolean, default: false },
+    isArchived: { type: Boolean, default: false },
+    archiveHistory: [{
+      action: { type: String, enum: ['archive', 'restore'], required: true },
+      actor: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+      at: { type: Date, required: true },
+      _id: false,
+    }],
     paidAt: { type: Date },
     completedAt: { type: Date },
   },
