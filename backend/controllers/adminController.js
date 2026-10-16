@@ -303,7 +303,7 @@ export const getStaleSupplierOrders = asyncHandler(async (req, res) => {
     supplier: 'PadodaTagh',
     supplierSubmitted: true,
     status: 'processing',
-    supplierStatus: { $in: ['pending', 'uncertain'] },
+    supplierStatus: { $in: ['pending', 'processing', 'uncertain'] },
     createdAt: { $lt: cutoffAt },
   };
 
@@ -609,7 +609,7 @@ export const checkOrderSupplierStatus = asyncHandler(async (req, res) => {
 
   const check = await dataProvider.checkTransactionStatus({
     supplier: 'PadodaTagh',
-    reference: order.orderId,
+    reference: order.supplierClientReference || order.orderId,
     providerReference: order.providerReference || order.supplierReference,
   });
 

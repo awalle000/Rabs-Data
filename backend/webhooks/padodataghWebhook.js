@@ -92,12 +92,13 @@ export const createPadodaTaghWebhookHandler = ({
     const clientReferenceMatches = expectedReferences.has(String(verified?.clientReference || ''));
     const supplierReferenceMatches = String(verified?.providerReference || '') === supplierOrderId
       && (!order.providerReference || String(verified.providerReference) === String(order.providerReference));
+    const verifiedIdentityMatches = clientReferenceMatches || (Boolean(order.providerReference) && supplierReferenceMatches);
     const verifiedStatusMatches = callbackStatus === 'completed'
       ? verified?.status === 'successful' && verified?.supplierStatus === 'completed'
-      : verified?.status === 'failed' && verified?.supplierStatus === 'rejected';
+      : verified?.status === 'failed' && verified?.supplierStatus === 'failed';
 
-    if (!clientReferenceMatches || !supplierReferenceMatches || !verifiedStatusMatches) {
-      if (clientReferenceMatches && supplierReferenceMatches && verified?.status === 'processing') {
+    if (!verifiedIdentityMatches || !supplierReferenceMatches || !verifiedStatusMatches) {
+      if (verifiedIdentityMatches && supplierReferenceMatches && verified?.status === 'processing') {
         const retryError = new AppError('Supplier order is still processing.', 503, 'SUPPLIER_STATUS_PENDING');
         await markFailed(eventHash, retryError, true);
         return res.status(503).json({ received: true, retry: true });

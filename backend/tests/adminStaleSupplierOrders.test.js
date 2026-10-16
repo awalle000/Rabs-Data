@@ -83,7 +83,7 @@ test('stale supplier diagnostic reports bounded PII-free results and does not mu
     assert.equal(filter.supplier, 'PadodaTagh');
     assert.equal(filter.supplierSubmitted, true);
     assert.equal(filter.status, 'processing');
-    assert.deepEqual(filter.supplierStatus, { $in: ['pending', 'uncertain'] });
+    assert.deepEqual(filter.supplierStatus, { $in: ['pending', 'processing', 'uncertain'] });
     assert.ok(filter.createdAt.$lt instanceof Date);
     assert.ok(Date.now() - filter.createdAt.$lt.getTime() >= SUPPLIER_RECONCILIATION_GIVE_UP_AFTER_MS - 100);
     assert.match(projection, /orderId/);

@@ -82,7 +82,7 @@ for (const [callbackStatus, verifiedStatus] of [['completed', 'successful'], ['r
   test(`PadodaTagh ${callbackStatus} callback applies only the authenticated ${verifiedStatus} status`, async () => {
     const verified = {
       status: verifiedStatus,
-      supplierStatus: callbackStatus,
+      supplierStatus: callbackStatus === 'completed' ? 'completed' : 'failed',
       clientReference: order.orderId,
       providerReference: order.providerReference,
     };
@@ -124,6 +124,25 @@ test('callback arriving before supplier status propagation is retryable and cann
     assert.deepEqual(result.responseBody, { received: true, retry: true });
     assert.equal(harness.calls.failed.length, 1);
     assert.equal(harness.calls.applied.length, 0);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('matching stored supplier UUID allows completion when supplier returns a different client reference', async () => {
+  const harness = makeHarness({ order, verified: {
+    status: 'successful', supplierStatus: 'completed',
+    clientReference: 'ORD-1694477', providerReference: order.providerReference,
+  } });
+
+  try {
+    const result = await invoke(harness.handler, {
+      orderId: order.providerReference, reference: order.orderId, status: 'completed',
+    });
+    assert.deepEqual(result.responseBody, { received: true, reconciled: true });
+    assert.equal(harness.calls.applied.length, 1);
+    assert.equal(harness.calls.applied[0].result.status, 'successful');
+    assert.equal(harness.calls.notifications.length, 1);
   } finally {
     harness.restore();
   }

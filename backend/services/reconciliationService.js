@@ -141,7 +141,7 @@ export const safeReconcileSupplierOrder = async ({ order }) => {
   try {
     status = await dataProvider.checkTransactionStatus({
       supplier: supplierName,
-      reference: order.orderId,
+      reference: order.supplierClientReference || order.orderId,
       providerReference: order.providerReference || order.supplierReference,
     });
     await recordSupplierEvent(supplierKey, status.status === 'successful' ? 'delivered' : status.status === 'failed' ? 'failed' : 'pending', {
@@ -213,7 +213,7 @@ export const runSupplierReconciliation = async ({ limit = 20 } = {}) => {
   const due = await Order.find({
     status: 'processing',
     supplierSubmitted: true,
-    supplierStatus: { $in: ['pending', 'uncertain'] },
+    supplierStatus: { $in: ['pending', 'processing', 'uncertain'] },
   })
     .sort({ createdAt: 1 })
     .limit(limit)

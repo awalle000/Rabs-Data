@@ -5,8 +5,10 @@ import {
   classifyPaymentVerification,
   classifySupplierResult,
   findDuplicateLedgerEntries,
+  runSupplierReconciliation,
   shouldAlertSupplierPending,
 } from '../services/reconciliationService.js';
+import Order from '../models/Order.js';
 import { paymentReviewNotification, supplierPendingNotification } from '../services/adminNotificationEvents.js';
 import { canDebitWallet } from '../services/walletService.js';
 import { runConfirmedOrderPaymentRecovery } from '../services/orderFulfillmentService.js';
@@ -63,6 +65,30 @@ test('ambiguous supplier outcomes are routed to review instead of a duplicate pu
   const uncertainResult = { status: 'uncertain', supplierStatus: 'uncertain' };
 
   assert.equal(classifySupplierResult({ order: processingOrder, result: uncertainResult }).action, 'review');
+});
+
+test('alternate supplier reconciliation selects legacy processing supplier states', async () => {
+  const originalFind = Order.find;
+  let filter;
+  Order.find = (query) => {
+    filter = query;
+    return {
+      sort() { return this; },
+      limit() { return this; },
+      lean: async () => [],
+    };
+  };
+
+  try {
+    await runSupplierReconciliation();
+    assert.deepEqual(filter, {
+      status: 'processing',
+      supplierSubmitted: true,
+      supplierStatus: { $in: ['pending', 'processing', 'uncertain'] },
+    });
+  } finally {
+    Order.find = originalFind;
+  }
 });
 
 test('pending supplier alerts honor the configured threshold and create an order review link', () => {

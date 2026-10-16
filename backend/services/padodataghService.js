@@ -81,6 +81,14 @@ const parseResponse = async (response) => {
   }
 };
 
+const normalizeOrderStatus = (value) => {
+  const status = String(value || '').trim().toLowerCase();
+  if (['completed', 'delivered'].includes(status)) return { status: 'successful', supplierStatus: 'completed' };
+  if (['failed', 'rejected'].includes(status)) return { status: 'failed', supplierStatus: 'failed' };
+  if (['pending', 'processing'].includes(status)) return { status: 'processing', supplierStatus: 'pending' };
+  return { status: 'uncertain', supplierStatus: 'uncertain' };
+};
+
 const redactSupplierText = (value) => String(value)
   .replace(/(?:\+?233|0)\d[\d\s()-]{7,}\d/g, '[REDACTED_PHONE]')
   .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[REDACTED_EMAIL]')
@@ -219,9 +227,10 @@ export const buyData = async ({ reference, network, providerPackageCode, provide
     body: { phone, ...(planId ? { plan_id: planId } : { volume, offer_slug: offerSlug }), reference: String(reference) },
   });
   const order = data.data && typeof data.data === 'object' ? data.data : data;
-  const status = String(order.status || '').toLowerCase();
+  const status = String(order.status || '').trim().toLowerCase();
   const providerReference = order.orderId || order.order_id || null;
-  if (!providerReference || !['processing', 'completed', 'rejected'].includes(status)) {
+  const normalized = normalizeOrderStatus(status);
+  if (!providerReference || normalized.status === 'uncertain') {
     return {
       status: 'uncertain', supplierStatus: 'uncertain', providerReference,
       clientReference: reference, supplierCost: Number(supplierCost), responseTimeMs,
@@ -230,8 +239,7 @@ export const buyData = async ({ reference, network, providerPackageCode, provide
   }
 
   return {
-    status: status === 'completed' ? 'successful' : status === 'rejected' ? 'failed' : 'processing',
-    supplierStatus: status,
+    ...normalized,
     providerReference,
     clientReference: order.reference || reference,
     supplierCost: Number(supplierCost),
@@ -246,10 +254,9 @@ export const getOrderStatus = async ({ reference, providerReference }) => {
   const { data } = await request(`/order/status/${encodeURIComponent(identifier)}`);
   const order = data.data && typeof data.data === 'object' ? data.data : data;
   const status = String(order.status || '').toLowerCase();
-  const normalizedStatus = ['completed', 'delivered'].includes(status) ? 'successful' : status === 'rejected' ? 'failed' : status === 'processing' ? 'processing' : 'uncertain';
+  const normalized = normalizeOrderStatus(status);
   return {
-    status: normalizedStatus,
-    supplierStatus: status || 'uncertain',
+    ...normalized,
     providerReference: order.orderId || order.order_id || null,
     clientReference: order.reference || null,
     refunded: false,
@@ -263,10 +270,10 @@ export const getHistoryOrder = async (reference) => {
   const order = data.data.find((item) => String(item.reference || '') === String(reference));
   if (!order) return null;
   const status = String(order.status || '').toLowerCase();
+  const normalized = normalizeOrderStatus(status);
   return {
-  status: ['completed', 'delivered'].includes(status) ? 'successful' : status === 'rejected' ? 'failed' : status === 'processing' ? 'processing' : 'uncertain',
-  supplierStatus: status || 'uncertain',
-  providerReference: order.orderId || null,
+  ...normalized,
+  providerReference: order.orderId || order.order_id || null,
   clientReference: order.reference || reference,
   refunded: false,
   message: `PadodaTagh history status: ${status || 'unknown'}`,

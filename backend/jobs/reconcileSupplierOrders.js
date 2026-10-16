@@ -35,7 +35,7 @@ export const createSupplierReconciliationRunner = ({
         supplier: 'PadodaTagh',
         supplierSubmitted: true,
         status: 'processing',
-        supplierStatus: { $in: ['pending', 'uncertain'] },
+        supplierStatus: { $in: ['pending', 'processing', 'uncertain'] },
         createdAt: {
           $lte: new Date(timestamp - firstCheckAfterMs),
           $gte: new Date(timestamp - giveUpAfterMs),

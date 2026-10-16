@@ -250,7 +250,7 @@ test('stale delivered results do not rewrite metadata on an already successful o
   }
 });
 
-test('processing submitted orders outside pending or uncertain remain ineligible', async () => {
+test('processing submitted orders with unrelated supplier states remain ineligible', async () => {
   const { orders, orderModel } = makeStore(1);
   orders[0].supplierStatus = 'not_started';
   let checked = 0;
@@ -260,6 +260,18 @@ test('processing submitted orders outside pending or uncertain remain ineligible
 
   assert.equal(checked, 0);
   assert.equal(orders[0].supplierReconcileNextCheckAt, undefined);
+});
+
+test('legacy processing supplier status remains eligible for reconciliation', async () => {
+  const { orders, orderModel } = makeStore(1);
+  orders[0].supplierStatus = 'processing';
+  const checked = [];
+  const run = makeRunner({ orderModel, reconcile: async ({ order }) => checked.push(order._id) });
+
+  await run();
+
+  assert.deepEqual(checked, ['order-0']);
+  assert.equal(orders[0].status, 'processing');
 });
 
 test('paused scheduler keeps the API-facing process available and creates no timer or claims', async () => {
