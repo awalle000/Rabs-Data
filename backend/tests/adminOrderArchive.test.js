@@ -6,6 +6,8 @@ import jwt from 'jsonwebtoken';
 import Order from '../models/Order.js';
 import Payment from '../models/Payment.js';
 import Transaction from '../models/Transaction.js';
+import PurchaseOperation from '../models/PurchaseOperation.js';
+import Wallet from '../models/Wallet.js';
 import User from '../models/User.js';
 import env from '../config/environment.js';
 import app from '../app.js';
@@ -20,6 +22,8 @@ const eligibleOrder = () => ({
   orderId: 'DH-20261009-000001',
   status: 'successful',
   paymentStatus: 'paid',
+  paymentMethod: 'direct',
+  paymentReference: 'payment-ref',
   supplierStatus: 'completed',
   supplierSubmitted: true,
   needsReview: false,
@@ -54,22 +58,26 @@ test('admin archives an eligible delivered order without mutating financial stat
     paymentFind: Payment.find,
     paymentUpdateMany: Payment.updateMany,
     transactionFind: Transaction.find,
+    walletExists: Wallet.exists,
+    purchaseOperationFindById: PurchaseOperation.findById,
     transactionUpdateMany: Transaction.updateMany,
   };
   const order = eligibleOrder();
   let updateFilter;
   let update;
+  let updateOptions;
   let paymentRead = false;
   let transactionRead = false;
   User.findById = () => ({ select: async () => ({ _id: adminId, role: 'admin', isActive: true, tokenVersion: 0 }) });
-  Order.findOne = async () => order;
-  Order.findOneAndUpdate = async (filter, change) => {
+  Order.findOne = () => ({ lean: async () => order });
+  Order.findOneAndUpdate = async (filter, change, options) => {
     updateFilter = filter;
     update = change;
+    updateOptions = options;
     return { ...order, isArchived: true };
   };
-  Payment.find = () => { paymentRead = true; return query([{ status: 'successful', orderRecoveryState: 'complete' }]); };
-  Transaction.find = () => { transactionRead = true; return query([{ status: 'successful', type: 'order_payment' }]); };
+  Payment.find = () => { paymentRead = true; return query([{ _id: 'payment-1', purpose: 'order', status: 'successful', orderRecoveryState: 'complete', amount: 12, reference: order.paymentReference }]); };
+  Transaction.find = () => { transactionRead = true; return query([{ status: 'successful', type: 'order_payment', payment: 'payment-1', direction: 'credit', amount: 12 }]); };
   Payment.updateMany = async () => assert.fail('Archive must not update payments');
   Transaction.updateMany = async () => assert.fail('Archive must not update ledger records');
   const server = app.listen(0, '127.0.0.1');
@@ -79,7 +87,8 @@ test('admin archives an eligible delivered order without mutating financial stat
     const token = jwt.sign({ id: adminId }, env.jwtSecret, { expiresIn: '5m' });
     const response = await fetch(`http://127.0.0.1:${server.address().port}/api/admin/orders/${orderId}/archive`, {
       method: 'PATCH',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isArchived: false, archiveHistory: [{ action: 'restore', actor: customerId }] }),
     });
     const payload = await response.json();
 
@@ -89,6 +98,9 @@ test('admin archives an eligible delivered order without mutating financial stat
     assert.equal(updateFilter.paymentStatus, 'paid');
     assert.equal(updateFilter.supplierStatus, 'completed');
     assert.equal(update.$set.isArchived, true);
+    assert.deepEqual(Object.keys(update.$set), ['isArchived']);
+    assert.equal(update.$push.archiveHistory.actor, adminId);
+    assert.deepEqual(updateOptions, { returnDocument: 'after', timestamps: false });
     assert.deepEqual(update.$push.archiveHistory, { action: 'archive', actor: adminId, at: update.$push.archiveHistory.at });
     assert.ok(update.$push.archiveHistory.at instanceof Date);
     assert.equal(paymentRead, true);
@@ -105,6 +117,8 @@ test('admin archives an eligible delivered order without mutating financial stat
     Payment.find = originals.paymentFind;
     Payment.updateMany = originals.paymentUpdateMany;
     Transaction.find = originals.transactionFind;
+    Wallet.exists = originals.walletExists;
+    PurchaseOperation.findById = originals.purchaseOperationFindById;
     Transaction.updateMany = originals.transactionUpdateMany;
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
@@ -145,13 +159,15 @@ test('archive rejects nonterminal order, payment, supplier, and ledger states', 
     orderFindOne: Order.findOne,
     paymentFind: Payment.find,
     transactionFind: Transaction.find,
+    walletExists: Wallet.exists,
+    purchaseOperationFindById: PurchaseOperation.findById,
     orderFindOneAndUpdate: Order.findOneAndUpdate,
   };
   let order = eligibleOrder();
   let payments = [];
   let transactions = [];
   let writeCalls = 0;
-  Order.findOne = async () => order;
+  Order.findOne = () => ({ lean: async () => order });
   Payment.find = () => query(payments);
   Transaction.find = () => query(transactions);
   Order.findOneAndUpdate = async () => { writeCalls += 1; return order; };
@@ -173,6 +189,13 @@ test('archive rejects nonterminal order, payment, supplier, and ledger states', 
       assert.equal(result.error?.statusCode, 409);
     }
 
+    for (const missingFlag of ['needsReview', 'refundRequired', 'supplierRefunded']) {
+      order = eligibleOrder();
+      delete order[missingFlag];
+      const result = await invoke(archiveOrder, { params: { id: orderId }, user: { _id: adminId } });
+      assert.equal(result.error?.statusCode, 409);
+    }
+
     order = eligibleOrder();
     payments = [{ status: 'pending' }];
     assert.equal((await invoke(archiveOrder, { params: { id: orderId }, user: { _id: adminId } })).error?.statusCode, 409);
@@ -186,6 +209,8 @@ test('archive rejects nonterminal order, payment, supplier, and ledger states', 
     Order.findOne = originals.orderFindOne;
     Payment.find = originals.paymentFind;
     Transaction.find = originals.transactionFind;
+    Wallet.exists = originals.walletExists;
+    PurchaseOperation.findById = originals.purchaseOperationFindById;
     Order.findOneAndUpdate = originals.orderFindOneAndUpdate;
   }
 });
@@ -226,9 +251,11 @@ test('archived orders can be restored without changing their order state', async
   const originalFindOneAndUpdate = Order.findOneAndUpdate;
   let filter;
   let update;
-  Order.findOneAndUpdate = async (match, change) => {
+  let options;
+  Order.findOneAndUpdate = async (match, change, queryOptions) => {
     filter = match;
     update = change;
+    options = queryOptions;
     return { _id: orderId, status: 'successful', paymentStatus: 'paid', isArchived: false };
   };
 
@@ -239,7 +266,78 @@ test('archived orders can be restored without changing their order state', async
     assert.equal(update.$set.isArchived, false);
     assert.equal(update.$push.archiveHistory.action, 'restore');
     assert.equal(update.$push.archiveHistory.actor, adminId);
+    assert.deepEqual(options, { returnDocument: 'after', timestamps: false });
   } finally {
     Order.findOneAndUpdate = originalFindOneAndUpdate;
+  }
+});
+
+test('archive rejects missing or inconsistent payment and ledger evidence', async () => {
+  const originals = {
+    orderFindOne: Order.findOne,
+    orderFindOneAndUpdate: Order.findOneAndUpdate,
+    paymentFind: Payment.find,
+    transactionFind: Transaction.find,
+    walletExists: Wallet.exists,
+    purchaseOperationFindById: PurchaseOperation.findById,
+  };
+  let order = eligibleOrder();
+  let payments = [];
+  let transactions = [];
+  let pendingWalletOperation = null;
+  let purchaseOperation = null;
+  let writeCalls = 0;
+  Order.findOne = () => ({ lean: async () => order });
+  Order.findOneAndUpdate = async () => { writeCalls += 1; return order; };
+  Payment.find = () => query(payments);
+  Transaction.find = () => query(transactions);
+  Wallet.exists = async () => pendingWalletOperation;
+  PurchaseOperation.findById = () => ({
+    select() { return this; },
+    lean: async () => purchaseOperation,
+  });
+
+  try {
+    const invokeArchive = () => invoke(archiveOrder, { params: { id: orderId }, user: { _id: adminId } });
+    assert.equal((await invokeArchive()).error?.statusCode, 409);
+
+    payments = [{ _id: 'payment-1', purpose: 'order', status: 'successful', amount: 12, reference: order.paymentReference }];
+    assert.equal((await invokeArchive()).error?.statusCode, 409);
+    payments = [{ _id: 'payment-1', purpose: 'order', status: 'successful', amount: 12, reference: 'other-ref' }];
+    transactions = [{ type: 'order_payment', status: 'successful', direction: 'credit', payment: 'payment-1', amount: 12 }];
+    assert.equal((await invokeArchive()).error?.statusCode, 409);
+    payments = [{ _id: 'payment-1', purpose: 'order', status: 'successful', amount: 11, reference: order.paymentReference }];
+    assert.equal((await invokeArchive()).error?.statusCode, 409);
+    payments = [{ _id: 'payment-1', purpose: 'order', status: 'successful', amount: 12, reference: order.paymentReference }];
+    transactions = [{ type: 'order_payment', status: 'successful', direction: 'credit', payment: 'different-payment', amount: 12 }];
+    assert.equal((await invokeArchive()).error?.statusCode, 409);
+    transactions = [{ type: 'order_payment', status: 'successful', direction: 'credit', payment: 'payment-1' }];
+    assert.equal((await invokeArchive()).error?.statusCode, 409);
+
+    order = { ...eligibleOrder(), paymentMethod: 'wallet' };
+    payments = [];
+    transactions = [];
+    assert.equal((await invokeArchive()).error?.statusCode, 409);
+    transactions = [{ type: 'wallet_debit', status: 'successful', direction: 'debit', reference: order.orderId, amount: order.sellingPrice }];
+    pendingWalletOperation = { pendingOperation: { order: order._id } };
+    assert.equal((await invokeArchive()).error?.statusCode, 409);
+    pendingWalletOperation = null;
+    assert.equal((await invokeArchive()).body.success, true);
+
+    order = { ...eligibleOrder(), purchaseOperation: 'purchase-operation-1' };
+    purchaseOperation = { order: order._id, status: 'processing' };
+    payments = [{ _id: 'payment-1', purpose: 'order', status: 'successful', amount: 12, reference: order.paymentReference }];
+    transactions = [{ type: 'order_payment', status: 'successful', direction: 'credit', payment: 'payment-1', amount: 12 }];
+    assert.equal((await invokeArchive()).error?.statusCode, 409);
+    purchaseOperation = { order: order._id, status: 'fulfilled' };
+    assert.equal((await invokeArchive()).body.success, true);
+    assert.equal(writeCalls, 2);
+  } finally {
+    Order.findOne = originals.orderFindOne;
+    Order.findOneAndUpdate = originals.orderFindOneAndUpdate;
+    Payment.find = originals.paymentFind;
+    Transaction.find = originals.transactionFind;
+    Wallet.exists = originals.walletExists;
+    PurchaseOperation.findById = originals.purchaseOperationFindById;
   }
 });

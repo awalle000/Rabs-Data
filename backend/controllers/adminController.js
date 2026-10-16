@@ -4,6 +4,8 @@ import PackageActivationAudit from '../models/PackageActivationAudit.js';
 import Order, { ORDER_STATUSES } from '../models/Order.js';
 import Payment from '../models/Payment.js';
 import Transaction, { TRANSACTION_TYPES } from '../models/Transaction.js';
+import PurchaseOperation from '../models/PurchaseOperation.js';
+import Wallet from '../models/Wallet.js';
 import { NETWORK_CODES } from '../config/networks.js';
 import { creditWallet } from '../services/walletService.js';
 import * as dataProvider from '../services/dataProviderService.js';
@@ -182,33 +184,73 @@ const assertOrderCanBeArchived = (order) => {
     order.paymentStatus !== 'paid' ||
     order.supplierStatus !== 'completed' ||
     order.supplierSubmitted !== true ||
-    order.needsReview === true ||
-    order.refundRequired === true ||
-    order.supplierRefunded === true ||
+    order.needsReview !== false ||
+    order.refundRequired !== false ||
+    order.supplierRefunded !== false ||
     (order.supplierReconcileLeaseUntil && order.supplierReconcileLeaseUntil > new Date())
   ) {
     throw new AppError('Only fully paid, successfully delivered orders with no unresolved review, refund, or supplier activity can be archived.', 409);
   }
 };
 
+const amountsMatch = (left, right) =>
+  Number.isFinite(Number(left)) && Number(left) > 0 &&
+  Number.isFinite(Number(right)) && Number(right) > 0 &&
+  roundMoney(left) === roundMoney(right);
+
+const hasSettledFinancialEvidence = (order, payments, transactions) => {
+  if (transactions.some((transaction) =>
+    transaction.status !== 'successful' || ['payment_issue', 'refund'].includes(transaction.type)
+  )) return false;
+
+  if (order.paymentMethod === 'wallet') {
+    if (payments.length > 0) return false;
+    const walletDebits = transactions.filter((transaction) => transaction.type === 'wallet_debit');
+    return walletDebits.length === 1 &&
+      walletDebits[0].direction === 'debit' &&
+      walletDebits[0].reference === order.orderId &&
+      amountsMatch(walletDebits[0].amount, order.sellingPrice);
+  }
+
+  if (
+    order.paymentMethod !== 'direct' ||
+    payments.some((payment) => payment.purpose !== 'order' || !['successful', 'failed'].includes(payment.status))
+  ) return false;
+  const successfulPayments = payments.filter((payment) => payment.status === 'successful');
+  const orderPayments = transactions.filter((transaction) => transaction.type === 'order_payment');
+  if (successfulPayments.length !== 1 || orderPayments.length !== 1) return false;
+
+  const [payment] = successfulPayments;
+  const [ledger] = orderPayments;
+  return ledger.direction === 'credit' &&
+    payment.reference === order.paymentReference &&
+    amountsMatch(payment.amount, order.customerChargedAmount ?? order.sellingPrice) &&
+    String(ledger.payment) === String(payment._id) &&
+    amountsMatch(ledger.amount, payment.amount);
+};
+
 export const archiveOrder = asyncHandler(async (req, res) => {
-  const order = await Order.findOne(orderLookup(req.params.id));
+  const order = await Order.findOne(orderLookup(req.params.id)).lean();
   if (!order) throw new AppError('Order not found', 404);
   if (order.isArchived) throw new AppError('Order is already archived', 409);
   assertOrderCanBeArchived(order);
 
-  const [payments, transactions] = await Promise.all([
-    Payment.find({ order: order._id }).select('status orderRecoveryState').lean(),
-    Transaction.find({ order: order._id }).select('status type').lean(),
+  const [payments, transactions, pendingWalletOperation, purchaseOperation] = await Promise.all([
+    Payment.find({ order: order._id }).select('status purpose orderRecoveryState amount reference').lean(),
+    Transaction.find({ order: order._id }).select('status type payment direction amount reference').lean(),
+    order.paymentMethod === 'wallet' ? Wallet.exists({ 'pendingOperation.order': order._id }) : null,
+    order.purchaseOperation ? PurchaseOperation.findById(order.purchaseOperation).select('order status').lean() : null,
   ]);
   const unresolvedPayment = payments.some((payment) =>
     !['successful', 'failed'].includes(payment.status) ||
     ['pending', 'processing', 'review'].includes(payment.orderRecoveryState)
   );
-  const unresolvedLedger = transactions.some((transaction) =>
-    transaction.status === 'pending' || ['payment_issue', 'refund'].includes(transaction.type)
+  const unresolvedPurchase = order.purchaseOperation && (
+    !purchaseOperation ||
+    purchaseOperation.status !== 'fulfilled' ||
+    String(purchaseOperation.order) !== String(order._id)
   );
-  if (unresolvedPayment || unresolvedLedger) {
+  if (unresolvedPayment || pendingWalletOperation || unresolvedPurchase || !hasSettledFinancialEvidence(order, payments, transactions)) {
     throw new AppError('Order has unresolved payment, refund, or ledger activity and cannot be archived.', 409);
   }
 
@@ -221,15 +263,20 @@ export const archiveOrder = asyncHandler(async (req, res) => {
       paymentStatus: 'paid',
       supplierStatus: 'completed',
       supplierSubmitted: true,
-      needsReview: { $ne: true },
-      refundRequired: { $ne: true },
-      supplierRefunded: { $ne: true },
+      needsReview: false,
+      refundRequired: false,
+      supplierRefunded: false,
+      $or: [
+        { supplierReconcileLeaseUntil: { $exists: false } },
+        { supplierReconcileLeaseUntil: null },
+        { supplierReconcileLeaseUntil: { $lte: at } },
+      ],
     },
     {
       $set: { isArchived: true },
       $push: { archiveHistory: { action: 'archive', actor: req.user._id, at } },
     },
-    { returnDocument: 'after' }
+    { returnDocument: 'after', timestamps: false }
   );
   if (!archived) throw new AppError('Order state changed; refresh and verify it before archiving.', 409);
   res.json({ success: true, order: archived });
@@ -242,7 +289,7 @@ export const restoreOrder = asyncHandler(async (req, res) => {
       $set: { isArchived: false },
       $push: { archiveHistory: { action: 'restore', actor: req.user._id, at: new Date() } },
     },
-    { returnDocument: 'after' }
+    { returnDocument: 'after', timestamps: false }
   );
   if (!restored) throw new AppError('Archived order not found', 404);
   res.json({ success: true, order: restored });
