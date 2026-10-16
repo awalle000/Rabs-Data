@@ -274,6 +274,18 @@ test('legacy processing supplier status remains eligible for reconciliation', as
   assert.equal(orders[0].status, 'processing');
 });
 
+test('orders older than the automatic window are never claimed by the worker', async () => {
+  const { orders, orderModel } = makeStore(1);
+  orders[0].createdAt = new Date(BASE_TIME - 24 * 60 * 60 * 1000 - 1);
+  let checked = 0;
+  const run = makeRunner({ orderModel, reconcile: async () => { checked += 1; } });
+
+  await run();
+
+  assert.equal(checked, 0);
+  assert.equal(orders[0].supplierReconcileNextCheckAt, undefined);
+});
+
 test('paused scheduler keeps the API-facing process available and creates no timer or claims', async () => {
   let intervalCalls = 0;
   let runnerCalls = 0;

@@ -48,6 +48,48 @@ test('stale supplier orders are visibly review-required, not failed or refunded'
   expect(adminService.getStaleSupplierOrders).toHaveBeenCalledWith({ page: 1, limit: 10 });
 });
 
+test('admin can open an older stale order, check supplier status, and see confirmed success', async () => {
+  const oldProcessingOrder = {
+    ...completedOrder,
+    _id: 'synthetic-old-id',
+    orderId: 'DH-SYNTHETIC-OLD',
+    status: 'processing',
+    supplierStatus: 'pending',
+    createdAt: '2026-10-13T12:00:00.000Z',
+  };
+  const deliveredOrder = {
+    ...oldProcessingOrder,
+    status: 'successful',
+    supplierStatus: 'completed',
+    needsReview: false,
+    completedAt: '2026-10-16T12:00:00.000Z',
+  };
+  adminService.getStaleSupplierOrders.mockResolvedValue({
+    summary: { total: 1, oldestCreatedAt: oldProcessingOrder.createdAt, oldestAgeMs: 48 * 60 * 60 * 1000 },
+    orders: [oldProcessingOrder],
+    pagination: { page: 1, pages: 1 },
+  });
+  adminService.getOrderDetails
+    .mockResolvedValueOnce({ order: oldProcessingOrder, payments: [], transactions: [] })
+    .mockResolvedValueOnce({ order: deliveredOrder, payments: [], transactions: [] });
+  adminService.checkOrderSupplierStatus.mockResolvedValue({
+    success: true,
+    order: deliveredOrder,
+    supplierCheck: { status: 'successful', supplierStatus: 'completed' },
+  });
+
+  render(<MemoryRouter><AdminOrders /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: 'View review list' }));
+  fireEvent.click(await screen.findByRole('button', { name: oldProcessingOrder.orderId }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Check Supplier Status' }));
+
+  await waitFor(() => expect(adminService.checkOrderSupplierStatus).toHaveBeenCalledWith(oldProcessingOrder._id));
+  expect(await screen.findByText('Checked supplier: status is completed')).toBeInTheDocument();
+  expect(await screen.findByText('Successful')).toBeInTheDocument();
+  expect(adminService.getOrderDetails).toHaveBeenCalledWith(oldProcessingOrder._id);
+  expect(adminService.getOrderDetails).toHaveBeenCalledTimes(2);
+});
+
 test('stale diagnostic failures are visible and can be retried', async () => {
   adminService.getStaleSupplierOrders.mockRejectedValueOnce(new Error('Diagnostic unavailable'));
   render(<MemoryRouter><AdminOrders /></MemoryRouter>);

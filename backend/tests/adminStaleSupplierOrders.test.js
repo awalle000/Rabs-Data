@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 process.env.MONGODB_URI ||= 'mongodb://127.0.0.1:27017/rabsdata-test';
 process.env.JWT_SECRET ||= 'test-only-not-a-secret';
 
-const [{ default: Order }, { getStaleSupplierOrders }, { SUPPLIER_RECONCILIATION_GIVE_UP_AFTER_MS }] = await Promise.all([
+const [{ default: Order }, { getStaleSupplierOrders, createCheckOrderSupplierStatusHandler }, { SUPPLIER_RECONCILIATION_GIVE_UP_AFTER_MS }] = await Promise.all([
   import('../models/Order.js'),
   import('../controllers/adminController.js'),
   import('../utils/supplierReconciliationPolicy.js'),
@@ -116,4 +116,95 @@ test('stale supplier diagnostic reports an empty state without a fake oldest age
     Order.aggregate = originals.aggregate;
     Order.find = originals.find;
   }
+});
+
+test('admin can manually reconcile an older order through verified supplier status', async () => {
+  const oldOrder = {
+    _id: 'synthetic-old-order',
+    orderId: 'DH-SYNTHETIC-OLD',
+    supplier: 'PadodaTagh',
+    supplierClientReference: 'DH-CLIENT-OLD',
+    providerReference: 'supplier-uuid-old',
+    supplierReference: 'supplier-uuid-old',
+    supplierSubmitted: true,
+    status: 'processing',
+    supplierStatus: 'pending',
+    createdAt: new Date(Date.now() - 48 * 60 * 60 * 1000),
+  };
+  const calls = { status: [], events: [], applied: [] };
+  const orderModel = {
+    findOne() { return { populate: async () => oldOrder }; },
+  };
+  const handler = createCheckOrderSupplierStatusHandler({
+    orderModel,
+    checkStatus: async (args) => {
+      calls.status.push(args);
+      return {
+        status: 'successful', supplierStatus: 'completed',
+        providerReference: oldOrder.providerReference,
+      };
+    },
+    recordEvent: async (...args) => calls.events.push(args),
+    applyResult: async (order, result, options) => {
+      calls.applied.push({ order, result, options });
+      return { ...order, status: 'successful', supplierStatus: 'completed', completedAt: new Date() };
+    },
+  });
+  let responseBody;
+  let nextError;
+
+  await handler(
+    { params: { id: oldOrder._id } },
+    { json(value) { responseBody = value; return value; } },
+    (error) => { nextError = error; }
+  );
+
+  assert.equal(nextError, undefined);
+  assert.deepEqual(calls.status, [{
+    supplier: 'PadodaTagh',
+    reference: oldOrder.supplierClientReference,
+    providerReference: oldOrder.providerReference,
+  }]);
+  assert.equal(calls.applied.length, 1);
+  assert.equal(calls.applied[0].options.allowFailedPaidDirectOrder, true);
+  assert.equal(responseBody.order.status, 'successful');
+  assert.equal(responseBody.order.supplierStatus, 'completed');
+  assert.ok(responseBody.order.completedAt instanceof Date);
+});
+
+test('admin manual check leaves an older order processing when supplier still reports pending', async () => {
+  const oldOrder = {
+    _id: 'synthetic-pending-order', orderId: 'DH-SYNTHETIC-PENDING', supplier: 'PadodaTagh',
+    supplierClientReference: 'DH-CLIENT-PENDING', providerReference: 'supplier-uuid-pending',
+    status: 'processing', supplierStatus: 'pending',
+    createdAt: new Date(Date.now() - 48 * 60 * 60 * 1000),
+  };
+  const calls = { updates: [], applied: 0 };
+  const orderModel = {
+    findOne() { return { populate: async () => oldOrder }; },
+    async updateOne(filter, update) {
+      calls.updates.push({ filter, update });
+      Object.assign(oldOrder, update.$set);
+    },
+    async findById() { return oldOrder; },
+  };
+  const handler = createCheckOrderSupplierStatusHandler({
+    orderModel,
+    checkStatus: async () => ({ status: 'processing', supplierStatus: 'pending' }),
+    recordEvent: async () => {},
+    applyResult: async () => { calls.applied += 1; },
+  });
+  let responseBody;
+
+  await handler(
+    { params: { id: oldOrder._id } },
+    { json(value) { responseBody = value; return value; } },
+    (error) => { throw error; }
+  );
+
+  assert.equal(responseBody.order.status, 'processing');
+  assert.equal(responseBody.order.supplierStatus, 'pending');
+  assert.equal(responseBody.order.needsReview, true);
+  assert.equal(calls.applied, 0);
+  assert.equal(calls.updates.length, 1);
 });

@@ -14,6 +14,7 @@ import {
 } from './adminNotificationEvents.js';
 import { recordSupplierEvent } from './supplierControlService.js';
 import { isExplicitPadodaTaghOrder } from '../utils/supplierPolicies.js';
+import { SUPPLIER_RECONCILIATION_GIVE_UP_AFTER_MS } from '../utils/supplierReconciliationPolicy.js';
 
 export const shouldAlertSupplierPending = ({ order, now = Date.now(), thresholdMs = env.supplierPendingAlertAfterMs }) =>
   Boolean(order?.createdAt && now - new Date(order.createdAt).getTime() >= thresholdMs);
@@ -209,11 +210,12 @@ export const runPaymentReconciliation = async ({ limit = 20 } = {}) => {
   return results;
 };
 
-export const runSupplierReconciliation = async ({ limit = 20 } = {}) => {
+export const runSupplierReconciliation = async ({ limit = 20, now = Date.now() } = {}) => {
   const due = await Order.find({
     status: 'processing',
     supplierSubmitted: true,
     supplierStatus: { $in: ['pending', 'processing', 'uncertain'] },
+    createdAt: { $gte: new Date(now - SUPPLIER_RECONCILIATION_GIVE_UP_AFTER_MS) },
   })
     .sort({ createdAt: 1 })
     .limit(limit)

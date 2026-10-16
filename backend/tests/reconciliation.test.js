@@ -14,6 +14,7 @@ import { canDebitWallet } from '../services/walletService.js';
 import { runConfirmedOrderPaymentRecovery } from '../services/orderFulfillmentService.js';
 import { reconcilePendingPayments } from '../jobs/reconcilePayments.js';
 import { recoverSuccessfulPayments } from '../jobs/auditLedger.js';
+import { SUPPLIER_RECONCILIATION_GIVE_UP_AFTER_MS } from '../utils/supplierReconciliationPolicy.js';
 
 const successVerification = {
   status: 'successful',
@@ -69,6 +70,7 @@ test('ambiguous supplier outcomes are routed to review instead of a duplicate pu
 
 test('alternate supplier reconciliation selects legacy processing supplier states', async () => {
   const originalFind = Order.find;
+  const now = Date.UTC(2026, 9, 16, 12);
   let filter;
   Order.find = (query) => {
     filter = query;
@@ -80,11 +82,12 @@ test('alternate supplier reconciliation selects legacy processing supplier state
   };
 
   try {
-    await runSupplierReconciliation();
+    await runSupplierReconciliation({ now });
     assert.deepEqual(filter, {
       status: 'processing',
       supplierSubmitted: true,
       supplierStatus: { $in: ['pending', 'processing', 'uncertain'] },
+      createdAt: { $gte: new Date(now - SUPPLIER_RECONCILIATION_GIVE_UP_AFTER_MS) },
     });
   } finally {
     Order.find = originalFind;

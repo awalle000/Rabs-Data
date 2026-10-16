@@ -598,36 +598,41 @@ export const syncSupplierBundles = asyncHandler(async (req, res) => {
   });
 });
 
-export const checkOrderSupplierStatus = asyncHandler(async (req, res) => {
+export const createCheckOrderSupplierStatusHandler = ({
+  orderModel = Order,
+  checkStatus = dataProvider.checkTransactionStatus,
+  applyResult = applyProviderResult,
+  recordEvent = recordSupplierEvent,
+} = {}) => asyncHandler(async (req, res) => {
   const { id } = req.params;
   const lookup = OBJECT_ID.test(id) ? { _id: id } : { orderId: id };
-  const order = await Order.findOne(lookup).populate('customer', 'name email phone');
+  const order = await orderModel.findOne(lookup).populate('customer', 'name email phone');
   if (!order) throw new AppError('Order not found', 404);
   if (!isExplicitPadodaTaghOrder(order)) {
     throw new AppError('This historical supplier is retired; automatic status checks are unavailable.', 409, 'SUPPLIER_RETIRED');
   }
 
-  const check = await dataProvider.checkTransactionStatus({
+  const check = await checkStatus({
     supplier: 'PadodaTagh',
     reference: order.supplierClientReference || order.orderId,
     providerReference: order.providerReference || order.supplierReference,
   });
 
-  await recordSupplierEvent('padodatagh', check.status === 'successful' ? 'delivered' : check.status === 'failed' ? 'failed' : 'pending', {
+  await recordEvent('padodatagh', check.status === 'successful' ? 'delivered' : check.status === 'failed' ? 'failed' : 'pending', {
     status: check.supplierStatus,
     message: 'Admin-triggered supplier status check completed.',
   });
 
   let updated;
   if (check.status === 'uncertain' || check.status === 'processing') {
-    await Order.updateOne({ _id: order._id, status: order.status }, { $set: {
+    await orderModel.updateOne({ _id: order._id, status: order.status }, { $set: {
       needsReview: true,
       supplierStatus: check.status === 'uncertain' ? 'uncertain' : 'pending',
       failureReason: 'Supplier has not provided a conclusive order status. Do not resubmit or refund automatically.',
     } });
-    updated = await Order.findById(order._id);
+    updated = await orderModel.findById(order._id);
   } else {
-    updated = await applyProviderResult(order, check, { allowFailedPaidDirectOrder: true });
+    updated = await applyResult(order, check, { allowFailedPaidDirectOrder: true });
   }
   res.json({
     success: true,
@@ -635,6 +640,8 @@ export const checkOrderSupplierStatus = asyncHandler(async (req, res) => {
     supplierCheck: check,
   });
 });
+
+export const checkOrderSupplierStatus = createCheckOrderSupplierStatusHandler();
 
 export const getSupplierManagement = asyncHandler(async (req, res) => {
   const [status, padodaCatalog, padodaPending] = await Promise.all([
