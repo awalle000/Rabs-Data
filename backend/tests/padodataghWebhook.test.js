@@ -4,10 +4,8 @@ import assert from 'node:assert/strict';
 process.env.MONGODB_URI = 'mongodb://127.0.0.1:27017/rabsdata-test';
 process.env.JWT_SECRET = 'test-only-not-a-secret';
 
-const [{ default: Order }, { createPadodaTaghWebhookHandler }] = await Promise.all([
-  import('../models/Order.js'),
-  import('../webhooks/padodataghWebhook.js'),
-]);
+const { createPadodaTaghWebhookHandler } = await import('../webhooks/padodataghWebhook.js');
+const { startSupplierReconciliation, getSupplierReconciliationRuntimeState } = await import('../jobs/reconcileSupplierOrders.js');
 
 const invokeBody = async (handler, raw) => {
   let responseBody;
@@ -25,17 +23,15 @@ const invokeBody = async (handler, raw) => {
 
 const invoke = (handler, payload) => invokeBody(handler, JSON.stringify(payload));
 
-const makeHarness = ({ order, verified, alreadySeen = false, failStatusChecks = 0 } = {}) => {
-  const originalOrderFind = Order.findOne;
-  const calls = { status: [], applied: [], registered: [], claimed: [], processed: [], failed: [], notifications: [] };
+const makeHarness = ({ order, verified, alreadySeen = false, failStatusChecks = 0, findCandidates } = {}) => {
+  const calls = { lookups: [], status: [], applied: [], registered: [], claimed: [], processed: [], failed: [], notifications: [] };
   let eventState = alreadySeen ? 'processed' : 'received';
   let remainingStatusFailures = failStatusChecks;
-  Order.findOne = async (filter) => {
-    calls.orderFilter = filter;
-    return order || null;
-  };
-
   const handler = createPadodaTaghWebhookHandler({
+    findCandidates: async (filter) => {
+      calls.lookups.push(filter);
+      return findCandidates ? findCandidates(filter) : order ? [order] : [];
+    },
     checkStatus: async (args) => {
       calls.status.push(args);
       if (remainingStatusFailures > 0) {
@@ -64,9 +60,7 @@ const makeHarness = ({ order, verified, alreadySeen = false, failStatusChecks = 
   return {
     calls,
     handler,
-    restore() {
-      Order.findOne = originalOrderFind;
-    },
+    restore() {},
   };
 };
 
@@ -129,6 +123,38 @@ test('callback arriving before supplier status propagation is retryable and cann
   }
 });
 
+test('verified completion webhook updates an order while periodic reconciliation is paused', async () => {
+  let intervalCalls = 0;
+  let runnerCalls = 0;
+  const scheduler = startSupplierReconciliation({
+    enabled: false,
+    runner: async () => { runnerCalls += 1; },
+    setIntervalFn: () => { intervalCalls += 1; return {}; },
+    logger: { warn() {}, info() {} },
+  });
+  const harness = makeHarness({ order, verified: {
+    status: 'successful', supplierStatus: 'completed',
+    clientReference: order.orderId, providerReference: order.providerReference,
+  } });
+
+  try {
+    assert.equal(getSupplierReconciliationRuntimeState(), 'paused');
+    const result = await invoke(harness.handler, {
+      orderId: order.providerReference, reference: order.orderId, status: 'completed',
+    });
+
+    assert.deepEqual(result.responseBody, { received: true, reconciled: true });
+    assert.equal(harness.calls.status.length, 1);
+    assert.equal(harness.calls.applied.length, 1);
+    assert.equal(harness.calls.applied[0].result.status, 'successful');
+    assert.equal(intervalCalls, 0);
+    assert.equal(runnerCalls, 0);
+  } finally {
+    harness.restore();
+    await scheduler.stop();
+  }
+});
+
 test('matching stored supplier UUID allows completion when supplier returns a different client reference', async () => {
   const harness = makeHarness({ order, verified: {
     status: 'successful', supplierStatus: 'completed',
@@ -143,6 +169,127 @@ test('matching stored supplier UUID allows completion when supplier returns a di
     assert.equal(harness.calls.applied.length, 1);
     assert.equal(harness.calls.applied[0].result.status, 'successful');
     assert.equal(harness.calls.notifications.length, 1);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('callback with a different client reference can locate an order by its stored supplier UUID', async () => {
+  const harness = makeHarness({ order, verified: {
+    status: 'successful', supplierStatus: 'completed',
+    clientReference: 'ORD-1694477', providerReference: order.providerReference,
+  }, findCandidates: (filter) => filter.$or.some((condition) =>
+    condition.providerReference === order.providerReference || condition.supplierReference === order.providerReference
+  ) ? [order] : [] });
+
+  try {
+    const result = await invoke(harness.handler, {
+      orderId: order.providerReference, reference: 'ORD-1694477', status: 'completed',
+    });
+    assert.deepEqual(result.responseBody, { received: true, reconciled: true });
+    assert.equal(harness.calls.applied.length, 1);
+    assert.equal(harness.calls.applied[0].result.status, 'successful');
+  } finally {
+    harness.restore();
+  }
+});
+
+test('multiple orders matching one supplier UUID fail closed without status checks or effects', async () => {
+  const secondOrder = { ...order, _id: 'second-order-id', orderId: 'DH-SECOND-ORDER' };
+  const harness = makeHarness({
+    order,
+    verified: { status: 'successful', supplierStatus: 'completed', providerReference: order.providerReference },
+    findCandidates: (filter) => filter.$or.some((condition) => condition.providerReference === order.providerReference)
+      ? [order, secondOrder]
+      : [],
+  });
+
+  try {
+    const result = await invoke(harness.handler, {
+      orderId: order.providerReference, reference: 'ORD-UNKNOWN-CLIENT', status: 'completed',
+    });
+    assert.equal(result.responseBody.error, 'Callback references do not identify one submitted order.');
+    assert.equal(harness.calls.status.length, 0);
+    assert.equal(harness.calls.registered.length, 0);
+    assert.equal(harness.calls.applied.length, 0);
+    assert.equal(harness.calls.notifications.length, 0);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('legacy supplierReference conflict is rejected even when the client reference matches', async () => {
+  const legacyOrder = { ...order, providerReference: undefined, supplierReference: 'stored-supplier-uuid' };
+  const harness = makeHarness({
+    order: legacyOrder,
+    verified: {
+      status: 'successful', supplierStatus: 'completed',
+      clientReference: legacyOrder.orderId, providerReference: 'callback-supplier-uuid',
+    },
+  });
+
+  try {
+    const result = await invoke(harness.handler, {
+      orderId: 'callback-supplier-uuid', reference: legacyOrder.orderId, status: 'completed',
+    });
+    assert.equal(result.responseBody.error, 'Callback order ID does not match the submitted order.');
+    assert.equal(harness.calls.status.length, 0);
+    assert.equal(harness.calls.registered.length, 0);
+    assert.equal(harness.calls.applied.length, 0);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('conflicting stored supplier identity fields fail closed before status verification', async () => {
+  const conflictedOrder = {
+    ...order,
+    supplierReference: 'different-stored-supplier-uuid',
+  };
+  const harness = makeHarness({
+    order: conflictedOrder,
+    verified: {
+      status: 'successful', supplierStatus: 'completed',
+      clientReference: conflictedOrder.orderId, providerReference: conflictedOrder.providerReference,
+    },
+  });
+
+  try {
+    const result = await invoke(harness.handler, {
+      orderId: conflictedOrder.providerReference,
+      reference: conflictedOrder.orderId,
+      status: 'completed',
+    });
+    assert.equal(result.responseBody.error, 'Callback order ID does not match the submitted order.');
+    assert.equal(harness.calls.status.length, 0);
+    assert.equal(harness.calls.registered.length, 0);
+    assert.equal(harness.calls.applied.length, 0);
+  } finally {
+    harness.restore();
+  }
+});
+
+test('legacy supplierReference alone can verify and recover a matching supplier completion', async () => {
+  const legacyOrder = { ...order, providerReference: undefined, supplierReference: order.providerReference };
+  const harness = makeHarness({
+    order: legacyOrder,
+    verified: {
+      status: 'successful', supplierStatus: 'completed',
+      clientReference: 'ORD-1694477', providerReference: legacyOrder.supplierReference,
+    },
+    findCandidates: (filter) => filter.$or.some((condition) => condition.supplierReference === legacyOrder.supplierReference)
+      ? [legacyOrder] : [],
+  });
+
+  try {
+    const result = await invoke(harness.handler, {
+      orderId: legacyOrder.supplierReference, reference: 'ORD-1694477', status: 'completed',
+    });
+    assert.deepEqual(result.responseBody, { received: true, reconciled: true });
+    assert.deepEqual(harness.calls.status, [{
+      supplier: 'PadodaTagh', reference: legacyOrder.orderId, providerReference: legacyOrder.supplierReference,
+    }]);
+    assert.equal(harness.calls.applied.length, 1);
   } finally {
     harness.restore();
   }
@@ -185,18 +332,13 @@ test('unmatched merchant reference is ignored without persisting or querying sup
 
 test('empty and synthetic test-webhook payloads are safely acknowledged without touching orders', async () => {
   const harness = makeHarness({ order, verified: null });
-  let orderLookups = 0;
-  const originalFind = Order.findOne;
-  Order.findOne = async (...args) => { orderLookups += 1; return originalFind(...args); };
-
   try {
     assert.deepEqual((await invokeBody(harness.handler, '')).responseBody, { received: true, ignored: true });
     assert.deepEqual((await invoke(harness.handler, {})).responseBody, { received: true, ignored: true });
     assert.deepEqual((await invoke(harness.handler, { event: 'webhook.test' })).responseBody, { received: true, ignored: true });
-    assert.equal(orderLookups, 0);
+    assert.equal(harness.calls.lookups.length, 0);
     assert.equal(harness.calls.registered.length, 0);
   } finally {
-    Order.findOne = originalFind;
     harness.restore();
   }
 });

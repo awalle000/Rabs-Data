@@ -1,8 +1,9 @@
 import { Link, useParams } from 'react-router-dom';
 import useAsync from '../../hooks/useAsync.js';
+import useInProgressOrderRefresh from '../../hooks/useInProgressOrderRefresh.js';
 import { getOrderById } from '../../services/orderService.js';
 import { formatDate } from '../../utils/formatDate.js';
-import { isPayable } from '../../utils/orderStatus.js';
+import { isInProgress, isPayable } from '../../utils/orderStatus.js';
 import OrderSummary from '../../components/OrderSummary/OrderSummary.jsx';
 import OrderStatus from '../../components/OrderStatus/OrderStatus.jsx';
 import Loader from '../../components/Loader/Loader.jsx';
@@ -12,6 +13,7 @@ import './OrderDetails.css';
 export default function OrderDetails() {
   const { id } = useParams();
   const { data, loading, error, reload } = useAsync(() => getOrderById(id), [id]);
+  useInProgressOrderRefresh(Boolean(data?.order && isInProgress(data.order.status)), reload);
 
   if (loading && !data) return <Loader fullPage label="Loading order..." />;
 

@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import useAsync from '../../hooks/useAsync.js';
+import useInProgressOrderRefresh from '../../hooks/useInProgressOrderRefresh.js';
 import { getMyOrders } from '../../services/orderService.js';
-import { ALL_STATUSES, STATUS_META } from '../../utils/orderStatus.js';
+import { ALL_STATUSES, isInProgress, STATUS_META } from '../../utils/orderStatus.js';
 import { formatCurrency } from '../../utils/formatCurrency.js';
 import { formatDate } from '../../utils/formatDate.js';
 import { formatPhone } from '../../utils/formatPhone.js';
@@ -30,6 +31,8 @@ export default function MyOrders() {
     () => getMyOrders({ page, limit: 10, status: status || undefined }),
     [page, status]
   );
+  const hasInProgressOrders = Boolean(data?.orders?.some((order) => isInProgress(order.status)));
+  useInProgressOrderRefresh(hasInProgressOrders, reload);
 
   return (
     <div className="container page">

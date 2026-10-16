@@ -13,6 +13,7 @@ import {
 } from '../utils/webhookIdempotency.js';
 
 export const createPadodaTaghWebhookHandler = ({
+  findCandidates = async (filter) => Order.find(filter).limit(2).lean(),
   checkStatus = dataProvider.checkTransactionStatus,
   applyResult = applyProviderResult,
   notify = notifyOrderUpdate,
@@ -52,16 +53,43 @@ export const createPadodaTaghWebhookHandler = ({
 
   let eventHash;
   try {
-    const order = await Order.findOne({
+    const baseFilter = {
       supplier: 'PadodaTagh',
       supplierSubmitted: true,
       status: 'processing',
+    };
+    const merchantMatches = await findCandidates({
+      ...baseFilter,
       $or: [{ orderId: reference }, { supplierClientReference: reference }],
     });
+    if (merchantMatches.length > 1) {
+      return res.status(409).json({ received: true, error: 'Callback references do not identify one submitted order.' });
+    }
+
+    let order = merchantMatches[0] || null;
+    let matchedBySupplierIdentity = false;
+    if (!order) {
+      const supplierMatches = await findCandidates({
+        ...baseFilter,
+        $or: [{ providerReference: supplierOrderId }, { supplierReference: supplierOrderId }],
+      });
+      if (supplierMatches.length > 1) {
+        return res.status(409).json({ received: true, error: 'Callback references do not identify one submitted order.' });
+      }
+      order = supplierMatches[0] || null;
+      matchedBySupplierIdentity = Boolean(order);
+    }
+
     if (!order) {
       return res.status(200).json({ received: true, ignored: true });
     }
-    if (order.providerReference && supplierOrderId !== String(order.providerReference)) {
+    const storedSupplierReferences = [order.providerReference, order.supplierReference]
+      .filter((value) => value != null && String(value).trim())
+      .map(String);
+    const storedSupplierReferencesAgree = storedSupplierReferences.every((value) => value === storedSupplierReferences[0]);
+    const callbackMatchesStoredSupplierReferences = storedSupplierReferences.every((value) => value === supplierOrderId);
+    if (!storedSupplierReferencesAgree || !callbackMatchesStoredSupplierReferences
+      || (matchedBySupplierIdentity && storedSupplierReferences.length === 0)) {
       return res.status(409).json({ received: true, error: 'Callback order ID does not match the submitted order.' });
     }
 
@@ -81,7 +109,7 @@ export const createPadodaTaghWebhookHandler = ({
     const verified = await checkStatus({
       supplier: 'PadodaTagh',
       reference: order.supplierClientReference || order.orderId,
-      providerReference: order.providerReference || supplierOrderId || null,
+      providerReference: order.providerReference || order.supplierReference || supplierOrderId || null,
     });
     if (!verified || verified.status === 'uncertain') {
       const retryError = new AppError('Supplier order status could not be verified.', 503, 'SUPPLIER_STATUS_UNCERTAIN');
@@ -91,8 +119,9 @@ export const createPadodaTaghWebhookHandler = ({
     const expectedReferences = new Set([order.orderId, order.supplierClientReference].filter(Boolean).map(String));
     const clientReferenceMatches = expectedReferences.has(String(verified?.clientReference || ''));
     const supplierReferenceMatches = String(verified?.providerReference || '') === supplierOrderId
-      && (!order.providerReference || String(verified.providerReference) === String(order.providerReference));
-    const verifiedIdentityMatches = clientReferenceMatches || (Boolean(order.providerReference) && supplierReferenceMatches);
+      && storedSupplierReferences.every((value) => String(verified.providerReference) === value);
+    const verifiedIdentityMatches = supplierReferenceMatches
+      && (clientReferenceMatches || storedSupplierReferences.length > 0);
     const verifiedStatusMatches = callbackStatus === 'completed'
       ? verified?.status === 'successful' && verified?.supplierStatus === 'completed'
       : verified?.status === 'failed' && verified?.supplierStatus === 'failed';
