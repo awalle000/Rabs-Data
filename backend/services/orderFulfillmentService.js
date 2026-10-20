@@ -216,7 +216,7 @@ export const applyProviderResult = async (order, result, { allowFailedPaidDirect
     if (order.status === 'successful') {
       await Order.updateOne(
         { _id: order._id, status: 'successful' },
-        { $set: { ...baseUpdates, needsReview: false, refundRequired: false }, $unset: { failureReason: 1 } }
+        { $set: { ...baseUpdates, needsReview: false, refundRequired: false },$unset: { failureReason: 1 } }
       );
       return Order.findById(order._id);
     }
@@ -224,15 +224,7 @@ export const applyProviderResult = async (order, result, { allowFailedPaidDirect
     const updated = await Order.findOneAndUpdate(
       { _id: order._id, status: applicableStatuses },
       {
-        $set: {
-          ...baseUpdates,
-          status: 'successful',
-          completedAt: new Date(),
-          supplierCompletedAt: new Date(),
-          needsReview: false,
-          refundRequired: false,
-        },
-        $unset: { failureReason: 1 },
+        $set: { ...baseUpdates, status: 'successful', completedAt: new Date(), supplierCompletedAt: new Date(), needsReview: false, refundRequired: false, },$unset: { failureReason: 1 },
       },
       { returnDocument: 'after' }
     );
@@ -326,12 +318,14 @@ const submitPersistedOrder = async (order) => {
     console.error(`${supplierName} error for ${order.orderId}:`, error.message);
 
     await recordSupplierEvent(supplierKey, error.timedOut ? 'timeout' : 'error', { status: error.code || 'error', message: error.message });
-    if (error.notSent || error.confirmedNotAccepted) {
+    
+    // Explicitly handle Cloudflare 403 blocks or unaccepted purchases to auto-fail and mark for refund
+    if (error.notSent || error.confirmedNotAccepted || error.responseStatus === 403 || error.isCloudflareBlock) {
       await Order.updateOne(
         { _id: order._id, status: 'processing' },
         { $set: getSupplierFailureUpdates(error) }
       );
-      const failed = await failOrder(order, 'Data delivery is temporarily unavailable. Please contact support.');
+      const failed = await failOrder(order, 'Supplier API blocked request (HTTP 403 Cloudflare block). Manual review or refund queued.');
       if (failed && ['failed', 'refunded'].includes(failed.status)) {
         await syncPurchaseOperationState(failed, 'failed');
       }
@@ -369,7 +363,6 @@ const submitPersistedOrder = async (order) => {
   }
 };
 
-// Sends a paid order to its persisted supplier. The submitted flag is written before the API call.
 export const fulfillOrder = async (orderId) => {
   const pendingOrder = await Order.findById(orderId);
   if (!pendingOrder) return null;
@@ -390,7 +383,7 @@ export const fulfillOrder = async (orderId) => {
   }
 
   const order = await Order.findOneAndUpdate(
-    { _id: orderId, status: 'paid', supplierSubmitted: { $ne: true }, providerReference: { $in: [null, ''] } },
+    { _id: orderId, status: 'paid', supplierSubmitted: { $ne: true }, providerReference: {$in: [null, ''] } },
     { $set: { status: 'processing', supplier: supplierName, supplierSubmitted: true, supplierSubmittedAt: new Date(), supplierStatus: 'pending' } },
     { returnDocument: 'after' }
   );
@@ -398,8 +391,6 @@ export const fulfillOrder = async (orderId) => {
   return submitPersistedOrder(order);
 };
 
-// The ONLY place a payment is confirmed. It always re-verifies with the
-// payment provider and never trusts the frontend or the webhook body.
 export const processPaymentReference = async (reference, webhookHint = null) => {
   const payment = await Payment.findOne({ reference });
   if (!payment) throw new AppError('Payment not found', 404);
@@ -458,8 +449,7 @@ export const processPaymentReference = async (reference, webhookHint = null) => 
 
   if (verification.status === 'pending' || verification.status === 'uncertain') {
     if (verification.status === 'uncertain') {
-      await Payment.updateOne({ _id: payment._id, status: { $in: ['initialized', 'pending'] } }, {
-        $set: { failureReason: 'Provider returned a reversed or uncertain status; manual review required.' },
+      await Payment.updateOne({ _id: payment._id, status: { $in: ['initialized', 'pending'] } }, {$set: { failureReason: 'Provider returned a reversed or uncertain status; manual review required.' },
       });
     }
     return payment;
@@ -527,7 +517,6 @@ export const processPaymentReference = async (reference, webhookHint = null) => 
     return failed || payment;
   }
 
-  // Successful: the amount and currency must match what we asked for.
   const referenceMatches = String(verification.reference || '') === String(payment.reference);
   const amountMatches = Number.isFinite(Number(verification.amount))
     && Math.round(Number(verification.amount) * 100) === Math.round(Number(payment.amount) * 100);
@@ -537,8 +526,7 @@ export const processPaymentReference = async (reference, webhookHint = null) => 
     || Boolean(order && String(order.paymentReference || '') === String(payment.reference)
       && String(order.customer || '') === String(payment.user || ''));
   if (!referenceMatches || !amountMatches || !currencyMatches || !orderMatches) {
-    await Payment.updateOne({ _id: payment._id, status: { $in: ['initialized', 'pending'] } }, {
-      $set: { failureReason: `Verified payment mismatch (reference=${referenceMatches}, amount=${amountMatches}, currency=${currencyMatches}, order=${orderMatches}); manual review required.` },
+    await Payment.updateOne({ _id: payment._id, status: { $in: ['initialized', 'pending'] } }, {$set: { failureReason: `Verified payment mismatch (reference=${referenceMatches}, amount=${amountMatches}, currency=${currencyMatches}, order=${orderMatches}); manual review required.` },
     });
     await Transaction.updateOne(
       { operationKey: `payment-verification-issue:${payment._id}` },
@@ -611,7 +599,6 @@ export const processPaymentReference = async (reference, webhookHint = null) => 
   });
 
   if (!paidOrder) {
-    // Money received but the order can no longer accept it (e.g. second payment).
     await Transaction.create({
       user: confirmed.user,
       order: confirmed.order,

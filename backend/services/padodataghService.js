@@ -117,7 +117,7 @@ const request = async (path, { method = 'GET', body, purchase = false, catalogVo
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), env.padodatagh.requestTimeoutMs);
+  const timeout = setTimeout(() => controller.abort(), env.padodatagh.requestTimeoutMs || 15000);
   const startedAt = Date.now();
 
   try {
@@ -126,6 +126,7 @@ const request = async (path, { method = 'GET', body, purchase = false, catalogVo
       method,
       headers: {
         'x-api-key': env.padodatagh.apiKey,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         Accept: 'application/json',
         ...(body ? { 'Content-Type': 'application/json' } : {}),
       },
@@ -138,12 +139,12 @@ const request = async (path, { method = 'GET', body, purchase = false, catalogVo
       const error = new AppError(`PadodaTagh request failed (HTTP ${response.status}).`, response.status >= 500 ? 502 : response.status, 'PADODATAGH_HTTP_ERROR');
       error.responseStatus = response.status;
       error.responseTimeMs = Date.now() - startedAt;
+      error.isCloudflareBlock = response.status === 403;
       error.supplierDiagnostics = {
         method,
         url: safeRequestTarget(requestUrl),
         requestFields: body && typeof body === 'object' ? Object.keys(body) : [],
         offerSlug: typeof body?.offer_slug === 'string' ? body.offer_slug.slice(0, 100) : null,
-        planId: typeof body?.plan_id === 'string' && isValidPlanId(body.plan_id) ? body.plan_id : null,
         planId: typeof body?.plan_id === 'string' && isValidPlanId(body.plan_id) ? body.plan_id : null,
         volume: Number.isFinite(Number(body?.volume ?? catalogVolume)) ? Number(body?.volume ?? catalogVolume) : null,
         merchantReference: typeof body?.reference === 'string' ? body.reference.slice(0, 128) : null,
@@ -152,9 +153,10 @@ const request = async (path, { method = 'GET', body, purchase = false, catalogVo
         durationMs: error.responseTimeMs,
         capturedAt: new Date(),
       };
-      error.notSent = !purchase;
+      // For HTTP 403 Cloudflare blocks on purchases, treat as NOT SENT (confirmed not accepted by supplier API)
+      error.notSent = !purchase || response.status === 403;
       error.confirmedNotAccepted = Boolean(
-        purchase && DOCUMENTED_REJECTION_CODES.has(response.status) && data?.success === false
+        (purchase && DOCUMENTED_REJECTION_CODES.has(response.status) && data?.success === false) || response.status === 403
       );
       throw error;
     }
@@ -257,6 +259,7 @@ export const getOrderStatus = async ({ reference, providerReference }) => {
     message: `PadodaTagh order status: ${status || 'unknown'}`,
   };
 };
+
 export const getHistoryOrder = async (reference) => {
   if (!reference) return null;
   const { data } = await request('/history?limit=50');
@@ -265,11 +268,11 @@ export const getHistoryOrder = async (reference) => {
   if (!order) return null;
   const status = String(order.status || '').toLowerCase();
   return {
-  status: status === 'completed' ? 'successful' : status === 'rejected' ? 'failed' : status === 'processing' ? 'processing' : 'uncertain',
-  supplierStatus: status || 'uncertain',
-  providerReference: order.orderId || null,
-  clientReference: order.reference || reference,
-  refunded: false,
-  message: `PadodaTagh history status: ${status || 'unknown'}`,
+    status: status === 'completed' ? 'successful' : status === 'rejected' ? 'failed' : status === 'processing' ? 'processing' : 'uncertain',
+    supplierStatus: status || 'uncertain',
+    providerReference: order.orderId || null,
+    clientReference: order.reference || reference,
+    refunded: false,
+    message: `PadodaTagh history status: ${status || 'unknown'}`,
   };
 };

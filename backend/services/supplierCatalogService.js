@@ -98,14 +98,15 @@ export const syncSupplierOffers = async ({ supplier = 'PadodaTagh' } = {}) => {
   const startedAt = new Date();
   const lockToken = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const previous = await CatalogSyncState.findOne({ name: `${provider.key}_catalog` }).lean();
+
   if (previous?.status === 'syncing' && previous.lockUntil && new Date(previous.lockUntil) > startedAt) {
     return { success: false, skipped: true, reason: 'already-running', status: previous.status };
   }
 
   const locked = await CatalogSyncState.findOneAndUpdate(
-    { name: `${provider.key}_catalog`, $or: [{ status: { $ne: 'syncing' } }, { lockUntil: { $lt: startedAt } }, { lockUntil: null }] },
+    { name: `${provider.key}_catalog`, $or: [{ status: { $ne: 'syncing' } }, { lockUntil: {$lt: startedAt } }, { lockUntil: null }] },
     {
-      $set: { name: `${provider.key}_catalog`, status: 'syncing', lockToken, lockUntil: new Date(Date.now() + 10 * 60 * 1000), lastStartedAt: startedAt, lastFinishedAt: null, lastError: '' },
+      $set: { name: `${provider.key}_catalog`, status: 'syncing', lockToken, lockUntil: new Date(Date.now() + 2 * 60 * 1000), lastStartedAt: startedAt, lastFinishedAt: null, lastError: '' },
       $setOnInsert: { summary: { added: 0, updated: 0, unavailable: 0, deactivated: 0, total: 0 } },
     },
     { upsert: true, returnDocument: 'after' }
