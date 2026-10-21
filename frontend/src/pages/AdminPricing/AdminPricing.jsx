@@ -19,13 +19,13 @@ const num = (value) => (value === '' || value == null ? NaN : Number(value));
 export default function AdminPricing() {
   const { data, loading, error, reload } = useAsync(() => getPackages(), []);
   const { data: syncData, reload: reloadSyncStatus } = useAsync(() => getSupplierSyncStatus(), []);
-  const [edits, setEdits] = useState({}); // id -> { providerCost, sellingPrice } as typed
+  const [edits, setEdits] = useState({});
   const [rowErrors, setRowErrors] = useState({});
   const [savingIds, setSavingIds] = useState([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [notice, setNotice] = useState(null);
 
-  const packages = data?.packages || [];
+  const packages = Array.isArray(data?.packages) ? data.packages : (Array.isArray(data) ? data : []);
   const now = Date.now();
   const freshPadodaOffers = packages.filter((pkg) => {
     const offer = pkg.supplierOffers?.padodatagh;
@@ -128,7 +128,7 @@ export default function AdminPricing() {
     try {
       const res = await syncSupplierBundles();
       if (!res.success) {
-        setNotice({ type: 'danger', text: res.message || 'PadodaTagh catalog refresh did not complete.' });
+        setNotice({ type: 'danger', text: res.message || 'PadodaTagh catalog refresh did not complete due to Cloudflare block.' });
         reloadSyncStatus();
         return;
       }

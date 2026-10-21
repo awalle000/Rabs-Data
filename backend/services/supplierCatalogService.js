@@ -188,8 +188,6 @@ export const syncSupplierOffers = async ({ supplier = 'PadodaTagh' } = {}) => {
       record.set(`supplierOffers.${provider.key}.hasValidityConflict`, Boolean(offer.hasValidityConflict || offer.validity === 'Unknown'));
       record.set(`supplierOffers.${provider.key}.lastVerifiedAt`, verifiedAt);
       record.set(`supplierOffers.${provider.key}.catalogVerified`, true);
-      record.set(`supplierOffers.${provider.key}.bundleType`, offer.bundleType || '');
-      record.set(`supplierOffers.${provider.key}.restrictions`, offer.restrictions ?? null);
       if (supplier === 'PadodaTagh') {
         record.providerPackageCode = offer.providerPackageCode;
         record.providerPlanId = offer.planId || '';
@@ -209,7 +207,11 @@ export const syncSupplierOffers = async ({ supplier = 'PadodaTagh' } = {}) => {
       : '';
     return { success: true, skipped: false, status: 'idle', summary, message: `${supplier} catalog refreshed. Customer selling prices were not changed.${costMessage}` };
   } catch (error) {
-    const safeMessage = String(error?.message || `${supplier} catalog sync failed`).slice(0, 180);
+    const isCloudflare = error?.responseStatus === 403 || error?.isCloudflareBlock || String(error?.message || '').includes('403');
+    const safeMessage = isCloudflare
+      ? 'PadodaTagh request restricted by Cloudflare (HTTP 403). Stored packages preserved.'
+      : String(error?.message || `${supplier} catalog sync failed`).slice(0, 180);
+
     await recordSupplierHealth('padodatagh', { ok: false, errorCode: error?.code });
     await recordSupplierEvent('padodatagh', error?.timedOut ? 'timeout' : 'error', { status: error?.code || 'error', message: safeMessage });
     await CatalogSyncState.findOneAndUpdate(

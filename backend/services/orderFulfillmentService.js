@@ -134,9 +134,6 @@ const recordOrderPaymentLedger = async (payment, order) => {
   }
 };
 
-// Wallet orders are refunded to the wallet. Direct-payment orders are flagged
-// for a manual refund, because refunding a card/MoMo payment needs the payment
-// provider's refund API.
 const failOrder = async (order, reason) => {
   if (order.paymentMethod === 'wallet') {
     const refunded = await Order.findOneAndUpdate(
@@ -172,7 +169,6 @@ const failOrder = async (order, reason) => {
   return failed || Order.findById(order._id);
 };
 
-// Applies a provider result to a "processing" order. Safe to call repeatedly.
 export const canAdminReconcileFailedOrder = (order) =>
   order?.status === 'failed'
   && order.paymentStatus === 'paid'
@@ -224,7 +220,7 @@ export const applyProviderResult = async (order, result, { allowFailedPaidDirect
     const updated = await Order.findOneAndUpdate(
       { _id: order._id, status: applicableStatuses },
       {
-        $set: { ...baseUpdates, status: 'successful', completedAt: new Date(), supplierCompletedAt: new Date(), needsReview: false, refundRequired: false, },$unset: { failureReason: 1 },
+        $set: { ...baseUpdates, status: 'successful', completedAt: new Date(), supplierCompletedAt: new Date(), needsReview: false, refundRequired: false },$unset: { failureReason: 1 },
       },
       { returnDocument: 'after' }
     );
@@ -265,7 +261,6 @@ export const applyProviderResult = async (order, result, { allowFailedPaidDirect
     return failed;
   }
 
-  // Still pending / processing
   await Order.updateOne({ _id: order._id, status: applicableStatuses }, { $set: baseUpdates });
   return Order.findById(order._id);
 };
@@ -319,8 +314,8 @@ const submitPersistedOrder = async (order) => {
 
     await recordSupplierEvent(supplierKey, error.timedOut ? 'timeout' : 'error', { status: error.code || 'error', message: error.message });
     
-    // Explicitly handle Cloudflare 403 blocks or unaccepted purchases to auto-fail and mark for refund
-    if (error.notSent || error.confirmedNotAccepted || error.responseStatus === 403 || error.isCloudflareBlock) {
+    const isCloudflare = error.responseStatus === 403 || error.isCloudflareBlock || String(error.message || '').includes('403');
+    if (error.notSent || error.confirmedNotAccepted || isCloudflare) {
       await Order.updateOne(
         { _id: order._id, status: 'processing' },
         { $set: getSupplierFailureUpdates(error) }
@@ -449,7 +444,8 @@ export const processPaymentReference = async (reference, webhookHint = null) => 
 
   if (verification.status === 'pending' || verification.status === 'uncertain') {
     if (verification.status === 'uncertain') {
-      await Payment.updateOne({ _id: payment._id, status: { $in: ['initialized', 'pending'] } }, {$set: { failureReason: 'Provider returned a reversed or uncertain status; manual review required.' },
+      await Payment.updateOne({ _id: payment._id, status: { $in: ['initialized', 'pending'] } }, {
+        $set: { failureReason: 'Provider returned a reversed or uncertain status; manual review required.' },
       });
     }
     return payment;
@@ -526,7 +522,8 @@ export const processPaymentReference = async (reference, webhookHint = null) => 
     || Boolean(order && String(order.paymentReference || '') === String(payment.reference)
       && String(order.customer || '') === String(payment.user || ''));
   if (!referenceMatches || !amountMatches || !currencyMatches || !orderMatches) {
-    await Payment.updateOne({ _id: payment._id, status: { $in: ['initialized', 'pending'] } }, {$set: { failureReason: `Verified payment mismatch (reference=${referenceMatches}, amount=${amountMatches}, currency=${currencyMatches}, order=${orderMatches}); manual review required.` },
+    await Payment.updateOne({ _id: payment._id, status: { $in: ['initialized', 'pending'] } }, {
+      $set: { failureReason: `Verified payment mismatch (reference=${referenceMatches}, amount=${amountMatches}, currency=${currencyMatches}, order=${orderMatches}); manual review required.` },
     });
     await Transaction.updateOne(
       { operationKey: `payment-verification-issue:${payment._id}` },
